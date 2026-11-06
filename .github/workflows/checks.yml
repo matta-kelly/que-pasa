@@ -1,0 +1,31 @@
+# The check of this repo on every push: scripts/check.sh, the same file `just check` runs. Copy as it is.
+# The ruleset on main requires the job `checks` on the exact commit, so the trigger has no path filter: the script skips
+# what a change does not need.
+name: checks
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # all history, so the script can read what the change touched against origin/main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: scripts/check.sh

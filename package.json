@@ -1,0 +1,25 @@
+{
+  "name": "que-pasa",
+  "description": "que2's harness: it knows no company. A workspace's agents are written against its types, and it runs them.",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.21.0",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "exports": "./schema.ts",
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@mku1tra/basis": "^0.30.0",
+    "@mku1tra/it": "^0.9.0",
+    "@types/node": "22.20.5",
+    "eslint": "10.12.0",
+    "eslint-plugin-sonarjs": "4.2.2",
+    "globals": "17.13.0",
+    "jiti": "2.7.0",
+    "prettier": "3.9.10",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.2",
+    "zod": "4.6.7"
+  }
+}

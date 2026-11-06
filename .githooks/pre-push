@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# A push of que-pasa goes out only when `just check` passes: the same check the pipeline runs.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+if ! just check; then
+  echo "Refused: just check failed. Fix it, or push with --no-verify to skip this once." >&2
+  exit 1
+fi

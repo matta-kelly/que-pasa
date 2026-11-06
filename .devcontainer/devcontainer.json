@@ -1,0 +1,39 @@
+// Node runs in this container, so node_modules never lands in the repo folder:
+// the folder is a notes vault whose indexer reads every file.
+{
+  "name": "que-pasa",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:22",
+
+  // Mount the repo at its host path, so absolute paths in caches and tool output
+  // mean the same thing inside the container and out.
+  "workspaceMount": "source=${localWorkspaceFolder},target=${localWorkspaceFolder},type=bind",
+  "workspaceFolder": "${localWorkspaceFolder}",
+
+  // keep-id: map your host user onto the image's `node` user (uid 1000), so files
+  // written into the repo from inside stay owned by you. The CPU budget bounds this
+  // checkout's container: 3 CPUs, and its shares when the host is contended.
+  "runArgs": [
+    "--userns=keep-id:uid=1000,gid=1000",
+    "--security-opt",
+    "label=disable",
+    "--cpus=3",
+    "--cpu-shares=256"
+  ],
+  "remoteUser": "node",
+  "updateRemoteUserUID": false,
+
+  // Packages live in a podman volume, not the repo folder: one per checkout, so a worktree has its own.
+  // The CLI names it with its id for this folder, so `just` and VS Code mount the same one.
+  "mounts": [
+    "source=que-pasa-node-modules-${devcontainerId},target=${containerWorkspaceFolder}/node_modules,type=volume"
+  ],
+
+  // A new volume starts root-owned: hand it to `node`, then install.
+  "postCreateCommand": "sudo chown node:node node_modules && npm ci",
+
+  "customizations": {
+    "vscode": {
+      "extensions": ["dbaeumer.vscode-eslint"]
+    }
+  }
+}
