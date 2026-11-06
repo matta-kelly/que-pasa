@@ -317,4 +317,61 @@ describe("run", () => {
     ).rejects.toThrow("no submit");
     expect(reports).toHaveLength(1);
   });
+
+  it("lets the model leave out a field with a default, and the tool gets the default", async () => {
+    const { faux, models, model } = scripted();
+    const reads: { path: string; offset: number }[] = [];
+    const read = defineTool({
+      name: "read_file",
+      description: "Read a file.",
+      schema: z.object({ path: z.string(), offset: z.number().default(0) }),
+      run: (input) => {
+        reads.push(input);
+        return "contents";
+      },
+    });
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("read_file", { path: "a.ts" })], {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage(
+        [fauxToolCall("submit", { verdict: "done", note: "read" })],
+        { stopReason: "toolUse" },
+      ),
+    ]);
+    const agent = defineAgent({
+      name: "reader",
+      model,
+      instructions: "Read.",
+      tools: [read],
+      output: verdict,
+    });
+
+    await run(agent, "Read a.ts", { caller, models });
+    expect(reads).toEqual([{ path: "a.ts", offset: 0 }]);
+  });
+
+  it("lets the model leave out a submit field with a default", async () => {
+    const { faux, models, model } = scripted();
+    const output = z.object({
+      verdict: z.enum(["done", "raise"]),
+      note: z.string().default("none"),
+    });
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("submit", { verdict: "done" })], {
+        stopReason: "toolUse",
+      }),
+    ]);
+    const agent = defineAgent({
+      name: "judge",
+      model,
+      instructions: "Judge.",
+      tools: [],
+      output,
+    });
+
+    await expect(
+      run(agent, "Judge this.", { caller, models }),
+    ).resolves.toEqual({ verdict: "done", note: "none" });
+  });
 });

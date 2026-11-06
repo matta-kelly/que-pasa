@@ -177,9 +177,12 @@ function toPiTool<C>(tool: Tool<z.ZodObject, C>, runtime: Runtime<C>) {
   });
 }
 
-/** The JSON Schema of a zod object, without the `$schema` key a tool's parameters do not take. */
+/**
+ * The JSON Schema of what the model must give: the input shape, so a field with a default is not required. Without the
+ * `$schema` key a tool's parameters do not take.
+ */
 function jsonSchema(schema: z.ZodObject): object {
-  const json: Record<string, unknown> = z.toJSONSchema(schema);
+  const json: Record<string, unknown> = z.toJSONSchema(schema, { io: "input" });
   delete json["$schema"];
   return json;
 }
