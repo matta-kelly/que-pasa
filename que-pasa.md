@@ -14,12 +14,16 @@ que-v2's harness: it knows no company. A company's workspace defines its agents 
 ---
 ## Built
 
-- the repo: a dev container, and one check (`just check`: notes, types, lint, format). The pre-push hook and the pipeline run the same `scripts/check.sh`
+- the repo: a dev container, and one check (`just check`: notes, then types, lint, format and tests). The pre-push hook and the pipeline run the same `scripts/check.sh`
+- `define/`: the two primitives a workspace writes its agents with, after LangChain's `tool()` and `createAgent`. Each is checked when it is defined, and fixed after
+	- `defineTool`: name (snake_case), description, schema (zod), `run(input, runtime)`, and the name of the connection it reads, if any
+	- `defineAgent`: name (kebab-case), model (`provider:model-id`), instructions, its tools (no two of one name), and an output schema. With no output, it answers in chat text
+	- the runtime: one shape for every agent, `runtime.context.caller`
 
 ## Not built
 
 The parts, each a folder:
-- `define/`: `defineAgent`, `defineTool`, `defineConnection`, `defineTeam`, the types a workspace is written against
+- `define/`: `defineConnection` and `defineTeam`
 - `loop/`: how an agent runs, on pi-durable
 - `middleware/`: approval, summarize, limits
 - `connections/`: the credential store, resolved by the run's caller

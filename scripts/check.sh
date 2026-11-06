@@ -17,11 +17,14 @@ sets="notes code"
 # 2. Each set's commands.
 # The repo's notes, against their types.
 set_notes() { npx basis lint; }
-# The code: types, lint and format. Tests join this set with the first code that has them.
+# The code: types, lint, format and tests. A pipeline log is read after the run, so it names each test.
+reporter="dot"
+[ -z "${CI:-}" ] || reporter=verbose
 set_code() {
   npx tsc --noEmit &&
     npx eslint &&
-    npx prettier --check .
+    npx prettier --check . &&
+    npx vitest run --reporter="$reporter"
 }
 
 # 3. The sets a changed file needs. A file no rule names needs every set, so a missing rule runs more, never less.
