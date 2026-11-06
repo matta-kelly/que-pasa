@@ -1,3 +1,5 @@
 # The vault's own files, and notes, which are written by hand.
 .obsidian
 *.md
+# The build, made from the source.
+dist

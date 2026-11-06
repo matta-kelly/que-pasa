@@ -7,8 +7,8 @@ import {
 } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { defineAgent, defineTool } from "../define/index.ts";
-import { run } from "./index.ts";
+import { defineAgent, defineTool, type Runtime } from "../define/index.ts";
+import { run, type RunUsage } from "./index.ts";
 
 /** A scripted model: each test queues the replies it gives, in order. */
 function scripted() {
@@ -49,7 +49,7 @@ describe("run", () => {
       description: "Read the stock of a SKU.",
       schema: z.object({ sku: z.string() }),
       run: ({ sku }, runtime) => {
-        calls.push({ sku, caller: runtime.context.caller.id });
+        calls.push({ sku, caller: runtime.caller.id });
         return { sku, units: 12 };
       },
     });
@@ -186,5 +186,135 @@ describe("run", () => {
     await expect(run(agent, "Judge this.", { caller, models })).rejects.toThrow(
       'a tool is named "submit"',
     );
+  });
+
+  it("gives each tool the context the run was given", async () => {
+    const { faux, models, model } = scripted();
+    type Sandbox = { container: string };
+    const seen: string[] = [];
+    const where = defineTool({
+      name: "where",
+      description: "Say which container the run is in.",
+      schema: z.object({}),
+      run: (_input, runtime: Runtime<Sandbox>) => {
+        seen.push(runtime.context.container);
+        return runtime.context.container;
+      },
+    });
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("where", {})], {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage([fauxText("In attempt-1.")]),
+    ]);
+    const agent = defineAgent({
+      name: "where",
+      model,
+      instructions: "Say where.",
+      tools: [where],
+    });
+
+    await run(agent, "Where?", {
+      caller,
+      models,
+      context: { container: "attempt-1" },
+    });
+    expect(seen).toEqual(["attempt-1"]);
+  });
+
+  it("rejects at once on a signal already aborted, with no model call", async () => {
+    const { faux, models, model } = scripted();
+    faux.setResponses([fauxAssistantMessage([fauxText("Too late.")])]);
+    const agent = defineAgent({
+      name: "geo",
+      model,
+      instructions: "Answer.",
+      tools: [],
+    });
+    const reason = new Error("time limit");
+
+    await expect(
+      run(agent, "Hi", { caller, models, signal: AbortSignal.abort(reason) }),
+    ).rejects.toBe(reason);
+    expect(faux.state.callCount).toBe(0);
+  });
+
+  it("stops a run that is going when its signal aborts, and makes no model call after it", async () => {
+    const { faux, models, model } = scripted();
+    const controller = new AbortController();
+    const reason = new Error("time limit");
+    const slow = defineTool({
+      name: "slow",
+      description: "Takes long.",
+      schema: z.object({}),
+      run: () => {
+        controller.abort(reason);
+        return "late";
+      },
+    });
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("slow", {})], {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage([fauxText("Should not be asked.")]),
+    ]);
+    const agent = defineAgent({
+      name: "slow",
+      model,
+      instructions: "Work.",
+      tools: [slow],
+    });
+
+    await expect(
+      run(agent, "Go", { caller, models, signal: controller.signal }),
+    ).rejects.toBe(reason);
+    expect(faux.state.callCount).toBe(1);
+  });
+
+  it("reports what the run spent, once, keyed by its model", async () => {
+    const { faux, models, model } = scripted();
+    faux.setResponses([fauxAssistantMessage([fauxText("Paris.")])]);
+    const agent = defineAgent({
+      name: "geo",
+      model,
+      instructions: "Answer briefly.",
+      tools: [],
+    });
+    const reports: RunUsage[] = [];
+
+    await run(agent, "Capital of France?", {
+      caller,
+      models,
+      onUsage: (usage) => reports.push(usage),
+    });
+    expect(reports).toHaveLength(1);
+    const spent = reports[0]?.models[model.replace(":", "/")];
+    expect(spent?.totalTokens).toBeGreaterThan(0);
+  });
+
+  it("reports what a failed run spent too", async () => {
+    const { faux, models, model } = scripted();
+    faux.setResponses([
+      fauxAssistantMessage([fauxText("Done.")]),
+      fauxAssistantMessage([fauxText("Done.")]),
+      fauxAssistantMessage([fauxText("Done.")]),
+    ]);
+    const agent = defineAgent({
+      name: "judge",
+      model,
+      instructions: "Judge.",
+      tools: [],
+      output: verdict,
+    });
+    const reports: RunUsage[] = [];
+
+    await expect(
+      run(agent, "Judge this.", {
+        caller,
+        models,
+        onUsage: (usage) => reports.push(usage),
+      }),
+    ).rejects.toThrow("no submit");
+    expect(reports).toHaveLength(1);
   });
 });

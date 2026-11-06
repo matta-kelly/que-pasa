@@ -1,6 +1,11 @@
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import {
+  BACKGROUND_CONTEXT,
+  withAbortSignal,
+} from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import {
+  type Conversation,
+  type Submission,
   createRegistry,
   defineExtension,
   defineTool as definePiTool,
@@ -8,16 +13,25 @@ import {
   Harness,
   hook,
   MemoryStorage,
+  type UsageState,
 } from "@earendil-works/pi-durable";
 import { z } from "zod";
 import type { Agent, Caller, Runtime, Tool } from "../define/index.ts";
 
-/** What a run needs besides the agent and its input: who it acts for, and the models it may call. */
-export type RunOptions = {
+/** The tokens and cost a run spent: per `provider/model-id` for model calls, and per tool for tools that report it. */
+export type RunUsage = UsageState;
+
+/** What a run needs besides the agent and its input. */
+export type RunOptions<C = unknown> = {
+  /** Who the run acts for. */
   caller: Caller;
   /** The host's models, with its providers set. */
   models: Models;
-};
+  /** Stops the run: run() rejects with the signal's reason, and no tool or model call starts after it. */
+  signal?: AbortSignal;
+  /** Called once when the run ends, answered or not, with what it spent. */
+  onUsage?: (usage: RunUsage) => void;
+} & (undefined extends C ? { context?: C } : { context: C });
 
 /** What a run gives back: the agent's output, checked against its schema, or its answer as text. */
 export type RunResult<O> = O extends z.ZodObject ? z.infer<O> : string;
@@ -29,10 +43,10 @@ export const submitTool = "submit";
 const reminders = 2;
 
 /** Run one agent on one input, for one caller, to its result. */
-export async function run<O extends z.ZodObject | undefined>(
-  agent: Agent<O>,
+export async function run<O extends z.ZodObject | undefined, C = unknown>(
+  agent: Agent<O, C>,
   input: string,
-  options: RunOptions,
+  options: RunOptions<C>,
 ): Promise<RunResult<O>> {
   const { output } = agent;
   if (output && agent.tools.some((tool) => tool.name === submitTool)) {
@@ -40,7 +54,11 @@ export async function run<O extends z.ZodObject | undefined>(
       `agent "${agent.name}": a tool is named "${submitTool}", which its output needs`,
     );
   }
-  const runtime: Runtime = { context: { caller: options.caller } };
+  options.signal?.throwIfAborted();
+  const runtime: Runtime<C> = {
+    caller: options.caller,
+    context: options.context as C,
+  };
   let submitted: { value: unknown } | undefined;
   let reminded = 0;
 
@@ -98,7 +116,7 @@ export async function run<O extends z.ZodObject | undefined>(
       { type: "input", content: input },
       context,
     );
-    const settled = await submission.wait(context);
+    const settled = await waitFor(submission, root, options.signal);
     if (settled.status !== "done" || settled.answer === undefined) {
       throw new Error(
         `agent "${agent.name}": the run ended with no answer (${settled.reason ?? settled.status})`,
@@ -115,12 +133,32 @@ export async function run<O extends z.ZodObject | undefined>(
     const { items } = await root.entries(range, 1, undefined, context);
     return text(items[0]?.model) as RunResult<O>;
   } finally {
+    if (options.onUsage) options.onUsage(await harness.usage(context));
     await harness.close(context);
   }
 }
 
+/**
+ * Wait for the run to settle. On abort, pi cancels only the wait and never the work, so the conversation is aborted
+ * too: its tasks stop, and the run rejects with the signal's reason.
+ */
+async function waitFor(
+  submission: Submission,
+  conversation: Conversation,
+  signal: AbortSignal | undefined,
+) {
+  if (!signal) return submission.wait(BACKGROUND_CONTEXT);
+  try {
+    return await submission.wait(withAbortSignal(signal, BACKGROUND_CONTEXT));
+  } catch (error) {
+    if (!signal.aborted) throw error;
+    await conversation.abort(BACKGROUND_CONTEXT);
+    throw signal.reason;
+  }
+}
+
 /** A que-pasa tool as a pi tool: pi checks the arguments against the JSON Schema, zod parses them, and the run's runtime goes in. */
-function toPiTool(tool: Tool, runtime: Runtime) {
+function toPiTool<C>(tool: Tool<z.ZodObject, C>, runtime: Runtime<C>) {
   return definePiTool({
     name: tool.name,
     description: tool.description,

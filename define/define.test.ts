@@ -9,14 +9,14 @@ const products = defineTool({
   description: "Read products by SKU.",
   schema: z.object({ sku: z.string() }),
   connection: "odoo",
-  run: ({ sku }, runtime) => `${sku} for ${runtime.context.caller.id}`,
+  run: ({ sku }, runtime) => `${sku} for ${runtime.caller.id}`,
 });
 
 describe("defineTool", () => {
   it("gives back the tool, and its run takes the input and the runtime", () => {
     expect(products.name).toBe("read_products");
     expect(products.connection).toBe("odoo");
-    expect(products.run({ sku: "A1" }, { context: { caller } })).toBe(
+    expect(products.run({ sku: "A1" }, { caller, context: undefined })).toBe(
       "A1 for matt",
     );
   });

@@ -1,1 +1,7 @@
-export { run, submitTool, type RunOptions, type RunResult } from "./run.ts";
+export {
+  run,
+  submitTool,
+  type RunOptions,
+  type RunResult,
+  type RunUsage,
+} from "./run.ts";
