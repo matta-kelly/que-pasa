@@ -1,57 +1,87 @@
 ---
 type: service
-description: "que-pasa, que-v2's harness: a company writes its agents once in a workspace, and que-pasa runs them, durably and traced. It knows no company. Read for what it holds to, and what it is made of: the workspace, the loop, the host, and its seams."
+description: "que-pasa, que-v2's harness: a company writes its agents once in a workspace, and que-pasa runs them, durably and traced, so each can be proven against cases. It knows no company. Read for what que-pasa is made of: the workspace, the loop, the host, and its seams."
 status: planned
 ---
-que-v2's harness: a company writes its agents once in a workspace, and que-pasa runs them, durably and traced. It knows no company.
-- [[#Principles]] what que-pasa holds to, and why
-- [[#Workspace]] what a company writes: the base
-- [[#Loop]] an agent in motion, for one caller
-- [[#Host]] how a workspace is served
+que-v2's harness. A company writes its agents once, in a workspace; que-pasa runs each of them for whoever calls it, keeps every run across a crash, and records what it did, so every agent can be proven against cases. It knows no company.
+- [[#Workspace]] what a company writes, and what it delivers: its agents
+- [[#Loop]] what an agent does when it runs
+- [[#Host]] how a workspace's agents are reached
 - [[#Seams]] what crosses to the outside
 
-- [[que-v2-design]]: the design it follows
-- [[que]]: the harness it replaces
+It takes LangChain's model and builds it on pi: their docs and paradigms are the guide, and only their parts, which run on LangSmith alone, are left out.
+- [Fleet](https://docs.langchain.com/langsmith/fleet/comparison): tools and shared [skills](https://docs.langchain.com/langsmith/fleet/skills) belong to the workspace; agents are built from them, and shared to run, clone or edit
+- an agent acts for the end user (an Assistant) or as itself (a Claw) ([Harrison Chase](https://x.com/hwchase17/status/2034680451017973903))
+- a [connection](https://docs.langchain.com/langsmith/python/managed-deep-agents-connections) holds a credential owned by the user or by the agent, and the runtime resolves the caller
+- [create_agent](https://docs.langchain.com/oss/python/langchain/agents.md): an agent is a small core, plus middleware
+
+- [[que-v2]]: the issue it is built for, and its open questions
+- [[que]]: the harness it replaces. que builds each person's agent at runtime from the plugins they can reach, one tool per op; que-pasa gives a company's tools to each team as agents made for its work, with access on top
 - `README.md`: how to run and check it, and how a project uses it
 
 ---
-## Principles
-
-Three ideas decide what que-pasa builds, and what it leaves out.
-- agents are the deliverable: a company's people are given agents, not tools. An agent definition is what ships, and a package can deliver agents
-- evals are the design: every agent is developed against cases and proven by them. So every run leaves a trace, and a case is just a run
-- the inner loop is king, and context is the product: harness engineering is context engineering. Good context is the smallest set of high-signal tokens that gets the result; more in the window often makes the agent worse. The measure is accuracy per token. The loop itself: [[que-pasa-loop#The idea]]
-
 ## Workspace
 
-What a company writes, in its own repo, with que-pasa's `define`: one per company. A workspace as a whole (`defineWorkspace`) is not built: today a host lists its agents itself.
-- agents (`defineAgent`): name, model (`provider:model-id`), instructions, its tools, and an output schema. With no output, it answers in text
-- tools (`defineTool`): name, description, zod schema, `run(input, runtime)`, the connection it names, and `replay: "safe"` when a call a crash cut off may run again. A tool gets `runtime.caller` and `runtime.context`, the JSON the host gave the run
-- skills: packaged know-how an agent loads when a task matches. Not built
-- connections: logins to outside services, owned by a user or by the agent. A tool names one; resolving it is not built
-- tests: eval cases, beside what they check. Not built
-- teams: who gets which agents. Not built
+What a company writes, in its own repo, with que-pasa's `define`: its agents, everything they are built from and proven by, and who may use them. One per company, the index of what its agents are built from. Its people are given its agents, not its tools, so access is set once per agent, and a person picks among their agents: no router stands in front of them. The factory is a workspace too, whose agents act as themselves and are started by events and code. A workspace as a whole (`defineWorkspace`) is not built: today a host lists its agents itself.
+
+```
+<company>/
+└── workspace/                  one per company
+    ├── connections.ts          each connection, and who owns its credential
+    ├── tools/
+    │   └── <service>/          the tools that read one connection
+    │       └── <tool>.ts
+    ├── skills/
+    │   └── <skill>/SKILL.md
+    ├── tests/                  eval cases, beside the capability they check
+    ├── agents/
+    │   └── <agent>.ts          picks its tools and skills from this workspace
+    └── teams.ts                each team: its members, and the agents it is given
+```
+
+- agents (`defineAgent`): what is delivered. A package can deliver agents
+	- its core: a name (kebab-case), a model (`provider:model-id`), instructions, the tools it may call and no others, and the shape of its result. With none, it answers in text
+	- it acts as the caller, with each person's own login, or as itself, with its own. Not built: today every tool gets the caller, and connections are not resolved
+	- context scope and lifecycle are settings, not kinds of agent: a chat agent keeps one conversation, a worker one task, an ephemeral one one call. Not built: today a run is one input
+	- middleware: optional behaviours on its loop, each separate: approval, summarize, call limits, loading. LangChain's shape. Not built
+- what an agent is built from
+	- tools (`defineTool`): [[define-tool]]. A function an agent can call, written once, so any agent in the workspace can be given it. It reads its login through a connection and never holds one
+	- skills: packaged know-how for one kind of task, a folder with `SKILL.md` (the Agent Skills format). The agent sees each skill's name and description at start, and reads the rest when a task matches. Not built
+	- connections: a named link to one outside service, whose credential lives in the workspace. Not built
+		- owned by a user: each person authorizes their own account once, and the run that first needs it pauses and asks
+		- owned by the agent: one credential, used for every caller
+- what an agent is proven by: tests, eval cases beside the capability they check. Every agent is developed against its cases and proven by them. Not built
+- who is given which agents: teams, a group of people and the agents they are given. Everyone in a team can run its agents; one person is a team of one. Not built
 
 ## Loop
 
-An agent in motion: one agent, one input, one caller, made by `loop/` on pi-durable. In full: [[que-pasa-loop]].
+[[que-pasa-loop]]: what an agent does when it runs, for one input and one caller. The agent remembers nothing; its run is a log, kept durably, so it goes on after a crash and leaves a full record.
+- a run carries its caller: tools read it from the run, and no tool or agent passes the user along. The caller can be a person, or a program: a service, or the agent itself
+- a person, a schedule, an event or code starts a run. Today `run()` waits for the run's end; a run started and left to go on, to be picked up later by its run id, for a schedule or an event, is not built
 - a run's life: it starts from an input, moves through model and tool calls, and ends with an answer or a submit. Continuing with a new input is not built
-- what keeps it right: durability, so it survives a crash; middleware (approval, limits) is not built
-- what it leaves: its result, usage, conversation and trace
+- what keeps it right: durability, so a finished step is never done twice; middleware (approval, limits) is not built
+- what it leaves: its result, usage, conversation, and its trace, which is what evals read
 
 ## Host
 
-How a workspace is served: a process that runs its agents.
-- today a host wires `loop/` itself: storage, models, its agents, the OTel SDK, and calling `run()` again for runs a restart left. Assembly is one
-- a standard host, which does that wiring by convention for any workspace (storage in a data folder, models and trace export from env, re-attach on start), and invocation (start a run, continue one): not built
-- delivery, on the host: chat, MCP. Not built
+How a workspace's agents are reached: a process that runs them.
+- today a host wires `loop/` itself: storage, models, its agents, the OTel SDK, and starting again the runs a restart left. Assembly is one
+- a standard host, which does that wiring by convention for any workspace: not built
+	- storage in the deployment's data folder, and models from env
+	- traces: it starts the OpenTelemetry SDK, which reads OTel's own `OTEL_*` variables, so a deployment points its traces at Langfuse, a collector or any backend with no code. With none set, OTLP JSON files in a known folder of the data folder: the one part que-pasa writes
+	- starting again, on start, the runs a restart left
+	- invocation: run one agent of the workspace on an input, or continue a conversation, so a person, or a simulated user in an eval, can drive several turns
+- delivery: how a person reaches their agents, on the host: chat, MCP. One agent definition serves every delivery, and a delivery changes nothing in it: an agent holds nothing about how it is reached. Not built
 
 ## Seams
 
 What crosses between que-pasa and the outside.
-- a company's repo: imports `que-pasa/define` and `que-pasa/loop`, built to `dist/`, from que-pasa's folder (`file:`, `install-links=true`). zod is a peer
-- a host: gives storage, models and agents; gets results, usage and conversations
-- observability: spans go out through `@opentelemetry/api` only. The host owns the SDK and where spans go; it records what only it knows on its own span and calls `run()` inside it, and every segment of the run, also after a crash, is in that trace
-- evals (eval2): read traces; cases live in the workspace's tests; they start runs as a host would, with their case ids on their own span
-- target systems (Odoo and others): reached by tools, with a connection's login. Not built
-
+- a company's repo imports `que-pasa/define` and `que-pasa/loop`, built to `dist/`, from que-pasa's folder (`file:`, `install-links=true`). zod is a peer
+- a host gives storage, models and agents, and gets results, usage and conversations
+- spans go out through `@opentelemetry/api` only. The host owns the SDK and where spans go; it records what only it knows on its own span and calls `run()` inside it. Every segment of a run, also after a crash, is in that trace
+- evals (eval2): que-pasa gives them traces and runs; grading is theirs
+	- they read standard OTLP: files for local and offline work, an endpoint for online grading
+	- a case lives in the workspace's tests; running one is a run started through invocation, as any host would, with the case and experiment ids on the host's own span
+	- scores and labels are eval2's own records, keyed by trace and span id, and can go out as `gen_ai.evaluation.result` events through the same export
+	- seeding a case's starting state is per domain (Odoo, a repo), and stays outside que-pasa
+- target systems (Odoo and others) are reached by tools, with a connection's login. Not built

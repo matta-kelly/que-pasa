@@ -20,6 +20,8 @@ The agent is a stateless reducer over a durable log, so the log is the run.
 	- the agent remembers nothing between calls: all memory lives in the log passed in. Same log in, same decision out
 	- as in chess: give anyone the move list and they can rebuild the board and pick the next move
 - the loop is all it is, with two jobs: `build`, what the model is shown (context engineering), and `run`, what the system does, prevents, measures and fixes (harness engineering)
+	- the inner loop is king, and harness engineering is always context engineering: how to give the model enough context to solve the task, most efficiently
+	- context is the product: good context is the smallest set of high-signal tokens that gets the result. More in the window often makes the agent worse. The measure is accuracy per token
 
 ```
 log = [first_event]
