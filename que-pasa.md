@@ -1,9 +1,10 @@
 ---
 type: service
-description: "que-pasa, que-v2's harness: a company writes its agents once in a workspace, and que-pasa runs them, durably and traced. It knows no company. Read for what que-pasa is made of: the workspace, the run, the host, and its seams."
+description: "que-pasa, que-v2's harness: a company writes its agents once in a workspace, and que-pasa runs them, durably and traced. It knows no company. Read for what it holds to, and what it is made of: the workspace, the loop, the host, and its seams."
 status: planned
 ---
 que-v2's harness: a company writes its agents once in a workspace, and que-pasa runs them, durably and traced. It knows no company.
+- [[#Principles]] what que-pasa holds to, and why
 - [[#Workspace]] what a company writes: the base
 - [[#Loop]] an agent in motion, for one caller
 - [[#Host]] how a workspace is served
@@ -14,6 +15,13 @@ que-v2's harness: a company writes its agents once in a workspace, and que-pasa 
 - `README.md`: how to run and check it, and how a project uses it
 
 ---
+## Principles
+
+Three ideas decide what que-pasa builds, and what it leaves out.
+- agents are the deliverable: a company's people are given agents, not tools. An agent definition is what ships, and a package can deliver agents
+- evals are the design: every agent is developed against cases and proven by them. So every run leaves a trace, and a case is just a run
+- the inner loop is king, and context is the product: harness engineering is context engineering. Good context is the smallest set of high-signal tokens that gets the result; more in the window often makes the agent worse. The measure is accuracy per token. The loop itself: [[que-pasa-loop#The idea]]
+
 ## Workspace
 
 What a company writes, in its own repo, with que-pasa's `define`: one per company. A workspace as a whole (`defineWorkspace`) is not built: today a host lists its agents itself.
@@ -47,49 +55,3 @@ What crosses between que-pasa and the outside.
 - evals (eval2): read traces; cases live in the workspace's tests; they start runs as a host would, with their case ids on their own span
 - target systems (Odoo and others): reached by tools, with a connection's login. Not built
 
----
-## Actual persisting doc ig
-
-*My take: in their docs, durability isn’t a separate pillar from your approval gates and idempotency. It’s what ties them together.*
-
-- Evals as a central design paradigm
-- Agents (definitions) are the deliverable
-	- *Package / Extension --> Delivering agents (packages can be a component)*
-- Inner Loop: DA KING
-	- Context is the product
-		- Good context engineering means finding the smallest set of high-signal tokens that gets the result you want. More stuff in the window often makes the agent worse.
-#### Inner Loop: *how the model sees and acts*
-
-The Inner loop is king: *harness engineering is always just context engineering*
-
-- Name of the game: how can we most efficiently provide the model with the sufficient context to solve the give question. 
-	- *Performance / Accuracy per token*
-	- Environment setup & *Inner loop*
-- The agent is a ***Stateless reducer***  
-	- A reducer is a function that takes “everything so far” plus “one new thing” and returns the new “everything so far.” 
-		- A running total is a reducer: `total = total + next_number`.
-	- “Stateless” means the agent itself remembers nothing between calls. 
-		- All memory lives in the log you pass in. Same log in, same decision out.
-	- Think of a chess game. You don’t need the players’ brains to know where things stand. Give anyone the move list and they can rebuild the board and pick the next move.
-- **Approval gates and idempotency aren’t two checklist items. They’re one thing: durable execution.** An approval gate is durability holding state while a human decides. Idempotency is durability’s own requirement in LangGraph’s docs. Your “no double orders” gap is the unfinished part of that one pillar, not a separate one.
-
-All it is
-```
-log = [first_event]
-while True:
-    context = build(log)          # context engineering
-    action  = model(context)      # the only "AI" line
-    if action.done: break
-    result  = run(action)         # your code, your rules
-    log.append(action, result)
-```
-
-The nuance worth keeping: 
-- one framing is that context engineering asks what you show the agent, while harness engineering asks what the system prevents, measures and fixes. 
-- Same loop, two jobs: `build` vs `run`.
-
-
-### Add:
-
-- concept of durability and resuming in our build out, where can things fail, how do we maintain this
-- all in all what are the durability invariants we are trying to uphold, how do we maintain this reliably and simply
