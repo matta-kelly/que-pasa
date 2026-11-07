@@ -5,7 +5,7 @@ status: planned
 ---
 que-v2's harness: a company writes its agents once in a workspace, and que-pasa runs them, durably and traced. It knows no company.
 - [[#Workspace]] what a company writes: the base
-- [[#Run]] an agent in motion, for one caller
+- [[#Loop]] an agent in motion, for one caller
 - [[#Host]] how a workspace is served
 - [[#Seams]] what crosses to the outside
 
@@ -24,16 +24,12 @@ What a company writes, in its own repo, with que-pasa's `define`: one per compan
 - tests: eval cases, beside what they check. Not built
 - teams: who gets which agents. Not built
 
-## Run
+## Loop
 
-An agent in motion: one agent, one input, one caller. Nobody writes a run; que-pasa makes it, in `loop/` on pi-durable, whose generation task is the loop itself.
-- starts: `runtime.run(agent, input, { runId, caller, model, context, ... })`. One conversation, made in one commit with its run document (run id, agent, model, caller, context). The same run id again is the same run
-- continued by a new input, for chat and for evals with a simulated user: not built
-- moves: model call, tool calls, until it answers, or submits its output (a `submit` tool with the output schema; a bad one goes back to the model, an answer in text is reminded twice)
-- shaped by middleware (approval, summarize, limits): not built
-- survives a crash: one runtime per process owns its storage (SQLite); nothing of a run is held in memory. Mid model request, the request is tried again; a tool cut off mid-call does not run again unless it is `replay: "safe"`; after the submit, the result is kept (`loop/crash.test.ts` kills a real process at each point)
-- ends: `run()` gives back the output, or the answer as text, and its usage (`onUsage`) and conversation (`onMessages`). `signal` stops it
-- leaves a trace: OpenTelemetry GenAI spans, live (`loop/trace.ts`). An `invoke_agent` span per process that works on the run, a `chat` span per model call, an `execute_tool` span per tool call. Message content only with `captureContent`
+An agent in motion: one agent, one input, one caller, made by `loop/` on pi-durable. In full: [[que-pasa-loop]].
+- a run's life: it starts from an input, moves through model and tool calls, and ends with an answer or a submit. Continuing with a new input is not built
+- what keeps it right: durability, so it survives a crash; middleware (approval, limits) is not built
+- what it leaves: its result, usage, conversation and trace
 
 ## Host
 
