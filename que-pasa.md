@@ -19,12 +19,13 @@ que-v2's harness: it knows no company. A company's workspace defines its agents 
 	- `defineTool`: name (snake_case), description, schema (zod), `run(input, runtime)`, and the name of the connection it reads, if any
 	- `defineAgent`: name (kebab-case), model (`provider:model-id`), instructions, its tools (no two of one name), and an output schema. With no output, it answers in chat text
 	- the runtime a tool gets: `runtime.caller`, who the run acts for, and `runtime.context`, what the host gave the run (LangChain's runtime context), typed by the agent's `C`
-- `loop/`: `run(agent, input, { caller, models, context, signal, onUsage })` runs one agent to its result, on pi-durable
+- `loop/`: `run(agent, input, { caller, models, context, signal, onUsage, onMessages })` runs one agent to its result, on pi-durable
 	- each tool is a pi tool: pi checks the arguments against its JSON Schema, zod parses them, and `run` gets the runtime
 	- an agent with an output gets a `submit` tool with that schema. A submit that fails the schema goes back to the model to try again; a good one ends the run, with no other model call. An agent that answers in text is reminded twice, then the run fails. LangChain's `toolStrategy`
 	- an agent with no output gives back its answer as text
 	- `signal` stops the run: the conversation is aborted, and `run` rejects with the signal's reason
 	- `onUsage` gets the tokens and cost the run spent, once, answered or not: per `provider/model-id`, and per tool
+	- `onMessages` gets the run's whole conversation, once, answered or not, as pi-ai's messages in order: the input, each assistant message with its tool calls, usage and stop reason, each tool result, the reminders, and the submit. Not the system prompt, which is the agent's instructions
 	- one run, in memory: nothing is kept after it ends, so a run cut off is not resumed
 
 ## Not built

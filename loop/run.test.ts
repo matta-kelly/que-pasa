@@ -1,4 +1,5 @@
 import {
+  type Message,
   createModels,
   fauxAssistantMessage,
   fauxProvider,
@@ -373,5 +374,169 @@ describe("run", () => {
     await expect(
       run(agent, "Judge this.", { caller, models }),
     ).resolves.toEqual({ verdict: "done", note: "none" });
+  });
+
+  describe("onMessages", () => {
+    /** Each message as its role and its text or tool call, to compare in order. */
+    function brief(messages: Message[]) {
+      return messages.map((message) => {
+        if (message.role === "user") {
+          const content = message.content;
+          return `user: ${typeof content === "string" ? content : content.map((b) => (b.type === "text" ? b.text : "")).join("")}`;
+        }
+        if (message.role === "assistant") {
+          return `assistant: ${message.content
+            .map((b) =>
+              b.type === "text"
+                ? b.text
+                : b.type === "toolCall"
+                  ? `call ${b.name}`
+                  : "",
+            )
+            .join("")}`;
+        }
+        if (message.role === "toolResult") {
+          return `result ${message.toolName}: ${message.content.map((b) => (b.type === "text" ? b.text : "")).join("")}`;
+        }
+        return message.role;
+      });
+    }
+
+    it("gives the whole conversation in order, with each tool call and its result", async () => {
+      const { faux, models, model } = scripted();
+      const stock = defineTool({
+        name: "read_stock",
+        description: "Read stock.",
+        schema: z.object({ sku: z.string() }),
+        run: () => "12",
+      });
+      faux.setResponses([
+        fauxAssistantMessage([fauxToolCall("read_stock", { sku: "A1" })], {
+          stopReason: "toolUse",
+        }),
+        fauxAssistantMessage([fauxText("12 units.")]),
+      ]);
+      const agent = defineAgent({
+        name: "stock",
+        model,
+        instructions: "Read stock.",
+        tools: [stock],
+      });
+      const calls: Message[][] = [];
+
+      await run(agent, "How many A1?", {
+        caller,
+        models,
+        onMessages: (messages) => calls.push(messages),
+      });
+      expect(calls).toHaveLength(1);
+      expect(brief(calls[0] ?? [])).toEqual([
+        "user: How many A1?",
+        "assistant: call read_stock",
+        "result read_stock: 12",
+        "assistant: 12 units.",
+      ]);
+    });
+
+    it("keeps the reminders the run sent, and the submit and its result", async () => {
+      const { faux, models, model } = scripted();
+      faux.setResponses([
+        fauxAssistantMessage([fauxText("It is done.")]),
+        fauxAssistantMessage(
+          [fauxToolCall("submit", { verdict: "done", note: "ok" })],
+          { stopReason: "toolUse" },
+        ),
+      ]);
+      const agent = defineAgent({
+        name: "judge",
+        model,
+        instructions: "Judge.",
+        tools: [],
+        output: verdict,
+      });
+      let seen: Message[] = [];
+
+      await run(agent, "Judge this.", {
+        caller,
+        models,
+        onMessages: (messages) => (seen = messages),
+      });
+      expect(brief(seen)).toEqual([
+        "user: Judge this.",
+        "assistant: It is done.",
+        "user: You have not given your result. Call submit with it.",
+        "assistant: call submit",
+        "result submit: Result received.",
+      ]);
+    });
+
+    it("is called for a run that fails, before run() rejects", async () => {
+      const { faux, models, model } = scripted();
+      faux.setResponses([
+        fauxAssistantMessage([fauxText("Done.")]),
+        fauxAssistantMessage([fauxText("Done.")]),
+        fauxAssistantMessage([fauxText("Done.")]),
+      ]);
+      const agent = defineAgent({
+        name: "judge",
+        model,
+        instructions: "Judge.",
+        tools: [],
+        output: verdict,
+      });
+      const calls: Message[][] = [];
+
+      await expect(
+        run(agent, "Judge this.", {
+          caller,
+          models,
+          onMessages: (messages) => calls.push(messages),
+        }),
+      ).rejects.toThrow("no submit");
+      expect(calls).toHaveLength(1);
+      expect(
+        calls[0]?.filter((message) => message.role === "assistant"),
+      ).toHaveLength(3);
+    });
+
+    it("is called for a run its signal stops", async () => {
+      const { faux, models, model } = scripted();
+      const controller = new AbortController();
+      const stop = defineTool({
+        name: "stop",
+        description: "Stops.",
+        schema: z.object({}),
+        run: () => {
+          controller.abort(new Error("time limit"));
+          return "stopped";
+        },
+      });
+      faux.setResponses([
+        fauxAssistantMessage([fauxToolCall("stop", {})], {
+          stopReason: "toolUse",
+        }),
+      ]);
+      const agent = defineAgent({
+        name: "stop",
+        model,
+        instructions: "Go.",
+        tools: [stop],
+      });
+      const calls: Message[][] = [];
+
+      await expect(
+        run(agent, "Go", {
+          caller,
+          models,
+          signal: controller.signal,
+          onMessages: (messages) => calls.push(messages),
+        }),
+      ).rejects.toThrow("time limit");
+      expect(calls).toHaveLength(1);
+      expect(brief(calls[0] ?? []).slice(0, 2)).toEqual([
+        "user: Go",
+        "assistant: call stop",
+      ]);
+    });
   });
 });

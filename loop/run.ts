@@ -2,7 +2,7 @@ import {
   BACKGROUND_CONTEXT,
   withAbortSignal,
 } from "@earendil-works/chord/context";
-import type { Models } from "@earendil-works/pi-ai";
+import type { Message, Models } from "@earendil-works/pi-ai";
 import {
   type Conversation,
   type Submission,
@@ -31,6 +31,12 @@ export type RunOptions<C = unknown> = {
   signal?: AbortSignal;
   /** Called once when the run ends, answered or not, with what it spent. */
   onUsage?: (usage: RunUsage) => void;
+  /**
+   * Called once when the run ends, answered or not, with its whole conversation in order, as pi-ai's messages: the
+   * input, each assistant message with its tool calls, each tool result, and the reminders the run sent. The system
+   * prompt is the agent's instructions, and is not in it.
+   */
+  onMessages?: (messages: Message[]) => void;
 } & (undefined extends C ? { context?: C } : { context: C });
 
 /** What a run gives back: the agent's output, checked against its schema, or its answer as text. */
@@ -108,8 +114,9 @@ export async function run<O extends z.ZodObject | undefined, C = unknown>(
     { models: options.models, registry },
     context,
   );
+  let root: Conversation | undefined;
   try {
-    const root = await harness.root(context, {
+    root = await harness.root(context, {
       agent: { model: modelRef(agent.model), instructions: agent.instructions },
     });
     const submission = await root.submit(
@@ -134,8 +141,31 @@ export async function run<O extends z.ZodObject | undefined, C = unknown>(
     return text(items[0]?.model) as RunResult<O>;
   } finally {
     if (options.onUsage) options.onUsage(await harness.usage(context));
+    if (options.onMessages && root)
+      options.onMessages(await conversation(root));
     await harness.close(context);
   }
+}
+
+/** The conversation's messages, oldest first, without the system entries: every page of its entries. */
+async function conversation(root: Conversation): Promise<Message[]> {
+  const messages: Message[] = [];
+  let cursor: Parameters<Conversation["entries"]>[2];
+  do {
+    const page = await root.entries(
+      { order: "ascending" },
+      100,
+      cursor,
+      BACKGROUND_CONTEXT,
+    );
+    for (const entry of page.items) {
+      for (const message of entry.model ?? []) {
+        if (message.role !== "system") messages.push(message);
+      }
+    }
+    cursor = page.next;
+  } while (cursor !== undefined);
+  return messages;
 }
 
 /**
@@ -193,19 +223,11 @@ function modelRef(model: string) {
   return { provider: model.slice(0, at), modelId: model.slice(at + 1) };
 }
 
-type Message = { role: string; content?: unknown };
-
 /** The text of an answer's assistant message. */
 function text(messages: readonly Message[] | undefined): string {
-  const content = messages?.find(
-    (message) => message.role === "assistant",
-  )?.content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter(
-      (block): block is { type: "text"; text: string } =>
-        block?.type === "text",
-    )
-    .map((block) => block.text)
+  const answer = messages?.find((message) => message.role === "assistant");
+  if (!answer) return "";
+  return answer.content
+    .flatMap((block) => (block.type === "text" ? [block.text] : []))
     .join("");
 }
