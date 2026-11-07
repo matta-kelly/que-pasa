@@ -21,8 +21,8 @@ que-v2's harness: it knows no company. A company's workspace defines its agents 
 	- the runtime a tool gets: `runtime.caller`, who the run acts for, and `runtime.context`, what the host gave the run (LangChain's runtime context), typed by the agent's `C`. The context is JSON, because the run keeps it
 - `loop/`: a runtime that runs agents to their results on pi-durable, and keeps each run across a crash
 	- `openRuntime({ storage, models, agents })`: one pi harness per process, on the storage the host picks (`openNodeSqliteStorage(file)` to keep runs, `MemoryStorage` to keep none). Each agent is its own extension, named `agent-<name>`, so a run that resumes finds its code. Runs a crash left unfinished go on at once
-	- `runtime.run(agent, input, { runId, caller, context, signal, onUsage, onMessages })` runs one agent on one input to its result. `runId` is the host's id for the run: the same id again is the same run, which goes on from where it is or gives back its result, with the input, caller and context it was started with
-	- a run is one conversation, made in one commit with its agent's model, instructions and extension, and its run document (`que-pasa.run`: run id, agent, caller, context). A session document per run id (`que-pasa.run-index`) finds it again. Its input goes in with the run id as pi's `requestId`, so it goes in once
+	- `runtime.run(agent, input, { runId, caller, model, context, signal, onUsage, onMessages })` runs one agent on one input to its result. `model` runs it on another model than the agent's, such as a fallback for a retry. `runId` is the host's id for the run: the same id again is the same run, which goes on from where it is or gives back its result, with the input, caller, model and context it was started with
+	- a run is one conversation, made in one commit with its agent's model, instructions and extension, and its run document (`que-pasa.run`: run id, agent, model, caller, context). A session document per run id (`que-pasa.run-index`) finds it again. Its input goes in with the run id as pi's `requestId`, so it goes in once
 	- no run state is held in memory: tools read the caller and context from the run document, the submitted result is the submit tool's result in the transcript, and the reminders are counted in the transcript
 	- each tool is a pi tool: pi checks the arguments against its JSON Schema (the input shape, so a field with a default is optional), zod parses them, and `run` gets the runtime
 	- an agent with an output gets a `submit` tool with that schema. A submit that fails the schema goes back to the model to try again; a good one ends the run, with no other model call. An agent that answers in text is reminded twice, then the run fails. LangChain's `toolStrategy`
@@ -87,3 +87,9 @@ while True:
 The nuance worth keeping: 
 - one framing is that context engineering asks what you show the agent, while harness engineering asks what the system prevents, measures and fixes. 
 - Same loop, two jobs: `build` vs `run`.
+
+
+### Add:
+
+- concept of durability and resuming in our build out, where can things fail, how do we maintain this
+- all in all what are the durability invariants we are trying to uphold, how do we maintain this reliably and simply

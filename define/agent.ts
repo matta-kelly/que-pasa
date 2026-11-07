@@ -22,6 +22,17 @@ export type Agent<
 const agentName = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 const modelId = /^[^:\s]+:\S+$/;
 
+/** A model id, "provider:model-id", as its provider and its id: throws on any other shape. */
+export function parseModel(model: string): {
+  provider: string;
+  modelId: string;
+} {
+  if (!modelId.test(model))
+    throw new Error(`the model must be "provider:model-id", not "${model}"`);
+  const at = model.indexOf(":");
+  return { provider: model.slice(0, at), modelId: model.slice(at + 1) };
+}
+
 /** An agent, checked: its name, its model id, its instructions, and tool names that do not repeat. */
 export function defineAgent<
   O extends z.ZodObject | undefined = undefined,

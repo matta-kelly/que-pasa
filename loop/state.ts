@@ -11,6 +11,8 @@ export type RunState = {
   runId: string;
   /** The agent it runs. */
   agent: string;
+  /** The model it runs on, "provider:model-id": the agent's, or the one the run was started with. */
+  model: string;
   caller: Caller;
   /** Absent when the run was given none. */
   context?: Json;
@@ -23,7 +25,7 @@ export const RunDoc = defineDoc<RunState>({
   scope: "conversation",
   history: "latest",
   fork: "initial",
-  initial: () => ({ runId: "", agent: "", caller: { id: "" } }),
+  initial: () => ({ runId: "", agent: "", model: "", caller: { id: "" } }),
   checkpointWhen: () => true,
 });
 

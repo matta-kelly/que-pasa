@@ -15,9 +15,14 @@ import {
   type UsageState,
 } from "@earendil-works/pi-durable";
 import type { z } from "zod";
-import type { Agent, Caller, Json } from "../define/index.ts";
+import {
+  type Agent,
+  type Caller,
+  type Json,
+  parseModel,
+} from "../define/index.ts";
 import { type AnyAgent, agentExtension, submitTool } from "./extension.ts";
-import { RunDoc, RunIndex } from "./state.ts";
+import { RunDoc, RunIndex, type RunState } from "./state.ts";
 import { answerOf, messagesOf, resultOf } from "./transcript.ts";
 
 /** The tokens and cost a run spent: per `provider/model-id` for model calls, and per tool for tools that report it. */
@@ -40,11 +45,13 @@ export type RuntimeOptions = {
 export type RunOptions<C extends Json | undefined> = {
   /**
    * The host's id for the run. A run started again with the same id is the same run: it goes on from where it is, or
-   * gives back its result, and its input, caller and context are the ones it was started with.
+   * gives back its result, and its input, caller, model and context are the ones it was started with.
    */
   runId: string;
   /** Who the run acts for. */
   caller: Caller;
+  /** The model to run on, "provider:model-id", in place of the agent's: such as a fallback for a retry. */
+  model?: string;
   /** Stops the run: run() rejects with the signal's reason, and no tool or model call starts after it. */
   signal?: AbortSignal;
   /** Called once when the run ends, answered or not, with what it spent. */
@@ -94,14 +101,16 @@ export async function openRuntime({
   const harness = await Harness.open(storage, { models, registry }, context);
   harness.resume();
 
-  /** The run's conversation: made with its agent and run document in one commit, or the one this run id already has. */
+  /**
+   * The run's conversation: made with its agent, its model and its run document in one commit, or the one this run id
+   * already has, which keeps what it was started with.
+   */
   async function conversationOf(
     agent: AnyAgent,
     extension: Extension,
-    runId: string,
-    caller: Caller,
-    given?: Json,
+    start: RunState,
   ) {
+    const { runId } = start;
     const id = await harness.commit(async (tx) => {
       const index = await tx.doc(RunIndex, runId, null);
       if (index.conversationId !== null) {
@@ -117,16 +126,11 @@ export async function openRuntime({
         ownership: { kind: "ownerless" },
       });
       await configure(tx, id, {
-        model: modelRef(agent.model),
+        model: parseModel(start.model),
         instructions: agent.instructions,
         extensions: [extension],
       });
-      Object.assign(await tx.doc(RunDoc, id), {
-        runId,
-        agent: agent.name,
-        caller,
-        ...(given === undefined ? {} : { context: given }),
-      });
+      Object.assign(await tx.doc(RunDoc, id), start);
       index.conversationId = id;
       return id;
     }, context);
@@ -152,13 +156,15 @@ export async function openRuntime({
     }
     options.signal?.throwIfAborted();
     const { runId, caller, signal, onUsage, onMessages } = options;
-    const conversation = await conversationOf(
-      agent,
-      entry.extension,
+    const model = options.model ?? agent.model;
+    parseModel(model);
+    const conversation = await conversationOf(agent, entry.extension, {
       runId,
+      agent: agent.name,
+      model,
       caller,
-      options.context,
-    );
+      ...(options.context === undefined ? {} : { context: options.context }),
+    });
     let messages: Message[] | undefined;
     const transcript = async () =>
       (messages ??= await messagesOf(conversation, context));
@@ -212,10 +218,4 @@ async function waitFor(
     await conversation.abort(context);
     throw signal.reason;
   }
-}
-
-/** "provider:model-id" as pi's model reference. defineAgent has checked the shape. */
-function modelRef(model: string) {
-  const at = model.indexOf(":");
-  return { provider: model.slice(0, at), modelId: model.slice(at + 1) };
 }

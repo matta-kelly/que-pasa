@@ -715,3 +715,83 @@ describe("a runtime", () => {
     ).rejects.toThrow('two agents are named "geo"');
   });
 });
+
+describe("a run's model", () => {
+  function setup() {
+    const faux = fauxProvider({ models: [{ id: "main" }, { id: "fallback" }] });
+    const models = createModels();
+    models.setProvider(faux.provider);
+    const geo = defineAgent({
+      name: "geo",
+      model: `${faux.provider.id}:main`,
+      instructions: "Answer.",
+      tools: [],
+    });
+    return { faux, models, geo, fallback: `${faux.provider.id}:fallback` };
+  }
+  const modelsOf = (messages: Message[]) =>
+    messages.flatMap((message) =>
+      message.role === "assistant" ? [message.model] : [],
+    );
+
+  it("is the agent's, when the run is given none", async () => {
+    const { faux, models, geo } = setup();
+    faux.setResponses([fauxAssistantMessage([fauxText("Paris.")])]);
+    let seen: Message[] = [];
+    await once(geo, "Capital of France?", {
+      caller,
+      models,
+      onMessages: (m) => (seen = m),
+    });
+    expect(modelsOf(seen)).toEqual(["main"]);
+  });
+
+  it("is the one the run is given, in place of the agent's", async () => {
+    const { faux, models, geo, fallback } = setup();
+    faux.setResponses([fauxAssistantMessage([fauxText("Paris.")])]);
+    let seen: Message[] = [];
+    await once(geo, "Capital of France?", {
+      caller,
+      models,
+      model: fallback,
+      onMessages: (m) => (seen = m),
+    });
+    expect(modelsOf(seen)).toEqual(["fallback"]);
+  });
+
+  it("is kept: the run started again with another model is the same run", async () => {
+    const { faux, models, geo, fallback } = setup();
+    faux.setResponses([fauxAssistantMessage([fauxText("Paris.")])]);
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [geo],
+    });
+    try {
+      await runtime.run(geo, "Capital of France?", {
+        runId: "a",
+        caller,
+        model: fallback,
+      });
+      let seen: Message[] = [];
+      await expect(
+        runtime.run(geo, "Capital of France?", {
+          runId: "a",
+          caller,
+          onMessages: (m) => (seen = m),
+        }),
+      ).resolves.toBe("Paris.");
+      expect(modelsOf(seen)).toEqual(["fallback"]);
+      expect(faux.state.callCount).toBe(1);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("refuses a model that is not provider:model-id", async () => {
+    const { models, geo } = setup();
+    await expect(
+      once(geo, "Hi", { caller, models, model: "fallback" }),
+    ).rejects.toThrow('the model must be "provider:model-id", not "fallback"');
+  });
+});
