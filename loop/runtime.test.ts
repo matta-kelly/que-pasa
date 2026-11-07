@@ -13,15 +13,7 @@ import { MemoryStorage } from "@earendil-works/pi-durable";
 import type { Models } from "@earendil-works/pi-ai";
 import type { Json, Agent } from "../define/index.ts";
 import { openRuntime, type RunOptions, type RunUsage } from "./index.ts";
-
-/** A scripted model: each test queues the replies it gives, in order. */
-function scripted() {
-  const faux = fauxProvider();
-  const models = createModels();
-  models.setProvider(faux.provider);
-  const model = faux.getModel();
-  return { faux, models, model: `${model.provider}:${model.id}` };
-}
+import { scripted } from "./scripted.fixture.ts";
 
 const caller = { id: "matt" };
 

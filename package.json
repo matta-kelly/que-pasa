@@ -26,7 +26,9 @@
   "dependencies": {
     "@earendil-works/chord": "1.5.0",
     "@earendil-works/pi-ai": "1.5.0",
-    "@earendil-works/pi-durable": "1.5.0"
+    "@earendil-works/pi-durable": "1.5.0",
+    "@opentelemetry/api": "1.10.0",
+    "@opentelemetry/semantic-conventions": "1.43.0"
   },
   "peerDependencies": {
     "zod": "^4.6.0"
@@ -35,6 +37,8 @@
     "@eslint/js": "10.0.1",
     "@mku1tra/basis": "^0.30.0",
     "@mku1tra/it": "^0.9.0",
+    "@opentelemetry/context-async-hooks": "3.0.0",
+    "@opentelemetry/sdk-trace": "3.0.0",
     "@types/node": "22.20.5",
     "eslint": "10.12.0",
     "eslint-plugin-sonarjs": "4.2.2",

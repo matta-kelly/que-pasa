@@ -24,6 +24,8 @@ await runtime.close();
 
 One runtime per process owns its SQLite file. After a crash, open it again with the same agents: unfinished runs go on, and `run` with the same `runId` gives back the result.
 
+Each run is traced as OpenTelemetry GenAI spans through `@opentelemetry/api`. To keep them, register an SDK (a tracer provider, an exporter, and an async context manager). To add what only the host knows, call `runtime.run()` inside a span of its own. `captureContent: true` on `openRuntime` adds message content.
+
 ## Use it from another project
 
 Install it from its folder, as npm packs it: `"que-pasa": "file:../que-pasa"`, with `install-links=true` in the project's `.npmrc`. It installs `dist/`, so build first: `just run npm run build`, or `just check`. zod is a peer dependency: the project brings it.

@@ -114,7 +114,7 @@ async function runtimeOf(
  * The JSON Schema of what the model must give: the input shape, so a field with a default is not required. Without the
  * `$schema` key a tool's parameters do not take.
  */
-function jsonSchema(schema: z.ZodObject): object {
+export function jsonSchema(schema: z.ZodObject): object {
   const json: Record<string, unknown> = z.toJSONSchema(schema, { io: "input" });
   delete json["$schema"];
   return json;

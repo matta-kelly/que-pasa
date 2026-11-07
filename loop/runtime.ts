@@ -23,6 +23,7 @@ import {
 } from "../define/index.ts";
 import { type AnyAgent, agentExtension, submitTool } from "./extension.ts";
 import { RunDoc, RunIndex, type RunState } from "./state.ts";
+import { activeParent, createTracing } from "./trace.ts";
 import { answerOf, messagesOf, resultOf } from "./transcript.ts";
 
 /** The tokens and cost a run spent: per `provider/model-id` for model calls, and per tool for tools that report it. */
@@ -39,6 +40,11 @@ export type RuntimeOptions = {
   models: Models;
   /** Every agent the host can run. A run that resumes after a restart finds its agent here, by name. */
   agents: readonly AnyAgent[];
+  /**
+   * Record message content in the trace: instructions, tool definitions, messages, tool arguments and results. Off by
+   * default, as the GenAI conventions say: content can hold sensitive data.
+   */
+  captureContent?: boolean;
 };
 
 /** What a run needs besides the agent and its input. */
@@ -86,6 +92,7 @@ export async function openRuntime({
   storage,
   models,
   agents,
+  captureContent = false,
 }: RuntimeOptions): Promise<Runtime> {
   const installed = new Map<
     string,
@@ -96,9 +103,15 @@ export async function openRuntime({
       throw new Error(`two agents are named "${agent.name}"`);
     installed.set(agent.name, { agent, extension: agentExtension(agent) });
   }
+  const tracing = createTracing({
+    agents: new Map([...installed].map(([name, { agent }]) => [name, agent])),
+    captureContent,
+  });
   const registry = createRegistry();
   for (const { extension } of installed.values()) registry.install(extension);
+  registry.install(tracing.extension);
   const harness = await Harness.open(storage, { models, registry }, context);
+  tracing.bind(harness);
   harness.resume();
 
   /**
@@ -128,10 +141,11 @@ export async function openRuntime({
       await configure(tx, id, {
         model: parseModel(start.model),
         instructions: agent.instructions,
-        extensions: [extension],
+        extensions: [extension, tracing.extension],
       });
       Object.assign(await tx.doc(RunDoc, id), start);
       index.conversationId = id;
+      tracing.start(id);
       return id;
     }, context);
     const conversation = await harness.conversation(id, context);
@@ -158,12 +172,14 @@ export async function openRuntime({
     const { runId, caller, signal, onUsage, onMessages } = options;
     const model = options.model ?? agent.model;
     parseModel(model);
+    const parent = activeParent();
     const conversation = await conversationOf(agent, entry.extension, {
       runId,
       agent: agent.name,
       model,
       caller,
       ...(options.context === undefined ? {} : { context: options.context }),
+      ...(parent === undefined ? {} : { trace: parent }),
     });
     let messages: Message[] | undefined;
     const transcript = async () =>
@@ -188,6 +204,8 @@ export async function openRuntime({
         );
       return result.value as RunResult<O>;
     } finally {
+      // The run's trace ends before run() does, so a host's span around it holds the whole run.
+      await tracing.ended(conversation.id);
       onUsage?.(
         (await harness.snapshot(UsageDoc, conversation.id, context)) ?? {
           models: {},
@@ -198,7 +216,13 @@ export async function openRuntime({
     }
   }
 
-  return { run, close: () => harness.close(context) };
+  return {
+    run,
+    async close() {
+      await tracing.closeAll();
+      await harness.close(context);
+    },
+  };
 }
 
 /**

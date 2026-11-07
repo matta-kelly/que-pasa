@@ -5,6 +5,13 @@ import {
 } from "@earendil-works/pi-durable";
 import type { Caller, Json } from "../define/index.ts";
 
+/** A span a run's trace hangs from, as plain JSON: the ids of OpenTelemetry's span context. */
+export type TraceParent = {
+  traceId: string;
+  spanId: string;
+  traceFlags: number;
+};
+
 /** What a run keeps besides its transcript: who it is for, and what its tools are given. One per run's conversation. */
 export type RunState = {
   /** The host's id for the run. */
@@ -16,6 +23,8 @@ export type RunState = {
   caller: Caller;
   /** Absent when the run was given none. */
   context?: Json;
+  /** The parent of each of its trace's segments: the host's span it was started in, or its first segment. */
+  trace?: TraceParent;
 };
 
 /** The run's own document, written in the commit that makes its conversation. */

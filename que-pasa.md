@@ -20,7 +20,7 @@ que-v2's harness: it knows no company. A company's workspace defines its agents 
 	- `defineAgent`: name (kebab-case), model (`provider:model-id`), instructions, its tools (no two of one name), and an output schema. With no output, it answers in chat text
 	- the runtime a tool gets: `runtime.caller`, who the run acts for, and `runtime.context`, what the host gave the run (LangChain's runtime context), typed by the agent's `C`. The context is JSON, because the run keeps it
 - `loop/`: a runtime that runs agents to their results on pi-durable, and keeps each run across a crash
-	- `openRuntime({ storage, models, agents })`: one pi harness per process, on the storage the host picks (`openNodeSqliteStorage(file)` to keep runs, `MemoryStorage` to keep none). Each agent is its own extension, named `agent-<name>`, so a run that resumes finds its code. Runs a crash left unfinished go on at once
+	- `openRuntime({ storage, models, agents, captureContent })`: one pi harness per process, on the storage the host picks (`openNodeSqliteStorage(file)` to keep runs, `MemoryStorage` to keep none). Each agent is its own extension, named `agent-<name>`, so a run that resumes finds its code. Runs a crash left unfinished go on at once
 	- `runtime.run(agent, input, { runId, caller, model, context, signal, onUsage, onMessages })` runs one agent on one input to its result. `model` runs it on another model than the agent's, such as a fallback for a retry. `runId` is the host's id for the run: the same id again is the same run, which goes on from where it is or gives back its result, with the input, caller, model and context it was started with
 	- a run is one conversation, made in one commit with its agent's model, instructions and extension, and its run document (`que-pasa.run`: run id, agent, model, caller, context). A session document per run id (`que-pasa.run-index`) finds it again. Its input goes in with the run id as pi's `requestId`, so it goes in once
 	- no run state is held in memory: tools read the caller and context from the run document, the submitted result is the submit tool's result in the transcript, and the reminders are counted in the transcript
@@ -34,6 +34,14 @@ que-v2's harness: it knows no company. A company's workspace defines its agents 
 		- mid model request: the request is tried again, and the run goes on
 		- mid tool: a tool left as it is does not run again, and the model gets an `interrupted` result; a `replay: "safe"` tool runs again, with the run's own context. One cut off five times (pi's restart limit) stops, and the model gets an error result
 		- after the submit: the result is kept, and the run gives it back with no model call
+- the trace (`loop/trace.ts`): each run as OpenTelemetry spans in the GenAI conventions (semconv 1.43.0), made live from pi's hooks, through `@opentelemetry/api` only. The host owns the SDK and the exporter; with none, it costs nothing
+	- `invoke_agent <agent>`: one per process that works on the run (a segment). Agent name, `gen_ai.agent.version` (a hash of instructions, tools, output and model), `gen_ai.conversation.id` = the run id, model and provider, `enduser.id` = the caller, `que_pasa.resumed`, the run's usage at its end, and error status with `error.type` when it failed (pi's reason, or `no_submit`). An event per reminder
+	- `chat <model>` per model request: response model and id, finish reason, tokens. `execute_tool <tool>` per tool call: name, call id, and `error.type` when its result is an error, such as `interrupted`
+	- message content (instructions, tool definitions, messages, tool arguments and results) only with `captureContent: true`
+	- the seam: que-pasa records what the run did; the host records what only it knows on its own span, and calls `runtime.run()` inside it. The run keeps that span's ids, or its first segment's, in its run document, so every segment of the run, also one that resumes in a new process, is in one trace
+	- `run()` gives back its result after its segment has ended, so the host's span holds the whole run
+- the package: another project installs que-pasa from its folder (`file:`, with `install-links=true`) and imports `que-pasa/define` and `que-pasa/loop`, built to `dist/` by `npm run build`, which the check runs. zod is a peer: one copy, the project's
+
 ## Not built
 
 The parts, each a folder:
