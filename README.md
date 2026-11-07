@@ -11,6 +11,19 @@ Node runs in the dev container (`.devcontainer/devcontainer.json`), never on the
 - `just run <command>`: run a command in the dev container, such as `just run npm install zod`
 - `just down`: remove this checkout's container and its own volumes
 
+## Run agents
+
+```ts
+import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { openRuntime } from "que-pasa/loop";
+
+const runtime = await openRuntime({ storage: await openNodeSqliteStorage("runs.sqlite"), models, agents: [nail] });
+const result = await runtime.run(nail, input, { runId: attempt.id, caller: { id: "assembly" }, context });
+await runtime.close();
+```
+
+One runtime per process owns its SQLite file. After a crash, open it again with the same agents: unfinished runs go on, and `run` with the same `runId` gives back the result.
+
 ## Use it from another project
 
 Install it from its folder, as npm packs it: `"que-pasa": "file:../que-pasa"`, with `install-links=true` in the project's `.npmrc`. It installs `dist/`, so build first: `just run npm run build`, or `just check`. zod is a peer dependency: the project brings it.

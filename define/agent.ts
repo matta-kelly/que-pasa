@@ -1,10 +1,11 @@
 import type { z } from "zod";
+import type { Json } from "./runtime.ts";
 import type { Tool } from "./tool.ts";
 
 /** One agent's picks from a workspace: the core every agent has. C is the context its runs are given, which its tools read. */
 export type Agent<
   O extends z.ZodObject | undefined = z.ZodObject | undefined,
-  C = unknown,
+  C extends Json | undefined = undefined,
 > = {
   /** kebab-case, as its file is named. */
   name: string;
@@ -24,7 +25,7 @@ const modelId = /^[^:\s]+:\S+$/;
 /** An agent, checked: its name, its model id, its instructions, and tool names that do not repeat. */
 export function defineAgent<
   O extends z.ZodObject | undefined = undefined,
-  C = unknown,
+  C extends Json | undefined = undefined,
 >(agent: Agent<O, C>): Agent<O, C> {
   if (!agentName.test(agent.name)) {
     throw new Error(`agent "${agent.name}": the name must be kebab-case`);

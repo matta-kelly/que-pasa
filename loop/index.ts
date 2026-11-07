@@ -1,7 +1,9 @@
+export { reminder, submitTool } from "./extension.ts";
 export {
-  run,
-  submitTool,
+  openRuntime,
   type RunOptions,
   type RunResult,
   type RunUsage,
-} from "./run.ts";
+  type Runtime,
+  type RuntimeOptions,
+} from "./runtime.ts";

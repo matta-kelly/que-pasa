@@ -9,7 +9,10 @@ import {
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { defineAgent, defineTool, type Runtime } from "../define/index.ts";
-import { run, type RunUsage } from "./index.ts";
+import { MemoryStorage } from "@earendil-works/pi-durable";
+import type { Models } from "@earendil-works/pi-ai";
+import type { Json, Agent } from "../define/index.ts";
+import { openRuntime, type RunOptions, type RunUsage } from "./index.ts";
 
 /** A scripted model: each test queues the replies it gives, in order. */
 function scripted() {
@@ -21,12 +24,36 @@ function scripted() {
 }
 
 const caller = { id: "matt" };
+
+/** One run on a fresh runtime in memory, closed after: what most tests need. */
+async function once<
+  O extends z.ZodObject | undefined,
+  C extends Json | undefined,
+>(
+  agent: Agent<O, C>,
+  input: string,
+  { models, ...options }: Omit<RunOptions<C>, "runId"> & { models: Models },
+) {
+  const runtime = await openRuntime({
+    storage: new MemoryStorage(),
+    models,
+    agents: [agent],
+  });
+  try {
+    return await runtime.run(agent, input, {
+      runId: "run-1",
+      ...options,
+    } as RunOptions<C>);
+  } finally {
+    await runtime.close();
+  }
+}
 const verdict = z.object({
   verdict: z.enum(["done", "raise"]),
   note: z.string(),
 });
 
-describe("run", () => {
+describe("a run", () => {
   it("gives back the answer as text, for an agent with no output", async () => {
     const { faux, models, model } = scripted();
     faux.setResponses([fauxAssistantMessage([fauxText("Paris.")])]);
@@ -38,7 +65,7 @@ describe("run", () => {
     });
 
     await expect(
-      run(agent, "Capital of France?", { caller, models }),
+      once(agent, "Capital of France?", { caller, models }),
     ).resolves.toBe("Paris.");
   });
 
@@ -67,7 +94,7 @@ describe("run", () => {
       tools: [stock],
     });
 
-    await expect(run(agent, "How many A1?", { caller, models })).resolves.toBe(
+    await expect(once(agent, "How many A1?", { caller, models })).resolves.toBe(
       "12 units.",
     );
     expect(calls).toEqual([{ sku: "A1", caller: "matt" }]);
@@ -91,7 +118,7 @@ describe("run", () => {
     });
 
     await expect(
-      run(agent, "Judge this.", { caller, models }),
+      once(agent, "Judge this.", { caller, models }),
     ).resolves.toEqual({ verdict: "done", note: "ok" });
     expect(faux.state.callCount).toBe(1);
   });
@@ -117,7 +144,7 @@ describe("run", () => {
     });
 
     await expect(
-      run(agent, "Judge this.", { caller, models }),
+      once(agent, "Judge this.", { caller, models }),
     ).resolves.toEqual({
       verdict: "raise",
       note: "unclear",
@@ -143,7 +170,7 @@ describe("run", () => {
     });
 
     await expect(
-      run(agent, "Judge this.", { caller, models }),
+      once(agent, "Judge this.", { caller, models }),
     ).resolves.toEqual({ verdict: "done", note: "ok" });
   });
 
@@ -162,9 +189,9 @@ describe("run", () => {
       output: verdict,
     });
 
-    await expect(run(agent, "Judge this.", { caller, models })).rejects.toThrow(
-      "no submit",
-    );
+    await expect(
+      once(agent, "Judge this.", { caller, models }),
+    ).rejects.toThrow("no submit");
     expect(faux.state.callCount).toBe(3);
   });
 
@@ -184,9 +211,9 @@ describe("run", () => {
       output: verdict,
     });
 
-    await expect(run(agent, "Judge this.", { caller, models })).rejects.toThrow(
-      'a tool is named "submit"',
-    );
+    await expect(
+      once(agent, "Judge this.", { caller, models }),
+    ).rejects.toThrow('a tool is named "submit"');
   });
 
   it("gives each tool the context the run was given", async () => {
@@ -215,7 +242,7 @@ describe("run", () => {
       tools: [where],
     });
 
-    await run(agent, "Where?", {
+    await once(agent, "Where?", {
       caller,
       models,
       context: { container: "attempt-1" },
@@ -235,7 +262,7 @@ describe("run", () => {
     const reason = new Error("time limit");
 
     await expect(
-      run(agent, "Hi", { caller, models, signal: AbortSignal.abort(reason) }),
+      once(agent, "Hi", { caller, models, signal: AbortSignal.abort(reason) }),
     ).rejects.toBe(reason);
     expect(faux.state.callCount).toBe(0);
   });
@@ -267,7 +294,7 @@ describe("run", () => {
     });
 
     await expect(
-      run(agent, "Go", { caller, models, signal: controller.signal }),
+      once(agent, "Go", { caller, models, signal: controller.signal }),
     ).rejects.toBe(reason);
     expect(faux.state.callCount).toBe(1);
   });
@@ -283,7 +310,7 @@ describe("run", () => {
     });
     const reports: RunUsage[] = [];
 
-    await run(agent, "Capital of France?", {
+    await once(agent, "Capital of France?", {
       caller,
       models,
       onUsage: (usage) => reports.push(usage),
@@ -310,7 +337,7 @@ describe("run", () => {
     const reports: RunUsage[] = [];
 
     await expect(
-      run(agent, "Judge this.", {
+      once(agent, "Judge this.", {
         caller,
         models,
         onUsage: (usage) => reports.push(usage),
@@ -348,7 +375,7 @@ describe("run", () => {
       output: verdict,
     });
 
-    await run(agent, "Read a.ts", { caller, models });
+    await once(agent, "Read a.ts", { caller, models });
     expect(reads).toEqual([{ path: "a.ts", offset: 0 }]);
   });
 
@@ -372,7 +399,7 @@ describe("run", () => {
     });
 
     await expect(
-      run(agent, "Judge this.", { caller, models }),
+      once(agent, "Judge this.", { caller, models }),
     ).resolves.toEqual({ verdict: "done", note: "none" });
   });
 
@@ -424,7 +451,7 @@ describe("run", () => {
       });
       const calls: Message[][] = [];
 
-      await run(agent, "How many A1?", {
+      await once(agent, "How many A1?", {
         caller,
         models,
         onMessages: (messages) => calls.push(messages),
@@ -456,7 +483,7 @@ describe("run", () => {
       });
       let seen: Message[] = [];
 
-      await run(agent, "Judge this.", {
+      await once(agent, "Judge this.", {
         caller,
         models,
         onMessages: (messages) => (seen = messages),
@@ -487,7 +514,7 @@ describe("run", () => {
       const calls: Message[][] = [];
 
       await expect(
-        run(agent, "Judge this.", {
+        once(agent, "Judge this.", {
           caller,
           models,
           onMessages: (messages) => calls.push(messages),
@@ -525,7 +552,7 @@ describe("run", () => {
       const calls: Message[][] = [];
 
       await expect(
-        run(agent, "Go", {
+        once(agent, "Go", {
           caller,
           models,
           signal: controller.signal,
@@ -538,5 +565,153 @@ describe("run", () => {
         "assistant: call stop",
       ]);
     });
+  });
+});
+
+describe("a runtime", () => {
+  function setup() {
+    const { faux, models, model } = scripted();
+    const geo = defineAgent({
+      name: "geo",
+      model,
+      instructions: "Answer briefly.",
+      tools: [],
+    });
+    const judge = defineAgent({
+      name: "judge",
+      model,
+      instructions: "Judge.",
+      tools: [],
+      output: verdict,
+    });
+    return { faux, models, geo, judge };
+  }
+
+  it("gives back the result of a run started again with its run id, with no model call", async () => {
+    const { faux, models, geo } = setup();
+    faux.setResponses([fauxAssistantMessage([fauxText("Paris.")])]);
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [geo],
+    });
+    try {
+      await expect(
+        runtime.run(geo, "Capital of France?", { runId: "a", caller }),
+      ).resolves.toBe("Paris.");
+      await expect(
+        runtime.run(geo, "Capital of France?", { runId: "a", caller }),
+      ).resolves.toBe("Paris.");
+      expect(faux.state.callCount).toBe(1);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("runs several agents, each run on its own", async () => {
+    const { faux, models, geo, judge } = setup();
+    faux.setResponses([
+      fauxAssistantMessage([fauxText("Paris.")]),
+      fauxAssistantMessage(
+        [fauxToolCall("submit", { verdict: "raise", note: "no" })],
+        { stopReason: "toolUse" },
+      ),
+    ]);
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [geo, judge],
+    });
+    try {
+      await expect(
+        runtime.run(geo, "Capital of France?", { runId: "a", caller }),
+      ).resolves.toBe("Paris.");
+      await expect(
+        runtime.run(judge, "Judge this.", { runId: "b", caller }),
+      ).resolves.toEqual({
+        verdict: "raise",
+        note: "no",
+      });
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("reports each run's own usage, not the runtime's total", async () => {
+    const { faux, models, geo } = setup();
+    faux.setResponses([
+      fauxAssistantMessage([
+        fauxText("Paris, the capital and largest city of France."),
+      ]),
+      fauxAssistantMessage([fauxText("Rome.")]),
+    ]);
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [geo],
+    });
+    const spent: number[] = [];
+    const onUsage = (usage: RunUsage) =>
+      spent.push(
+        Object.values(usage.models).reduce((sum, u) => sum + u.output, 0),
+      );
+    try {
+      await runtime.run(geo, "Capital of France?", {
+        runId: "a",
+        caller,
+        onUsage,
+      });
+      await runtime.run(geo, "Capital of Italy?", {
+        runId: "b",
+        caller,
+        onUsage,
+      });
+      expect(spent).toHaveLength(2);
+      expect(spent[1]).toBeLessThan(spent[0] ?? 0);
+      expect(spent[1]).toBeGreaterThan(0);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("refuses an agent it was not opened with", async () => {
+    const { models, geo, judge } = setup();
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [geo],
+    });
+    try {
+      await expect(
+        runtime.run(judge, "Judge this.", { runId: "a", caller }),
+      ).rejects.toThrow('agent "judge" was not given when the runtime opened');
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("refuses a run id that belongs to another agent's run", async () => {
+    const { faux, models, geo, judge } = setup();
+    faux.setResponses([fauxAssistantMessage([fauxText("Paris.")])]);
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [geo, judge],
+    });
+    try {
+      await runtime.run(geo, "Capital of France?", { runId: "a", caller });
+      await expect(
+        runtime.run(judge, "Judge this.", { runId: "a", caller }),
+      ).rejects.toThrow('run "a" is of agent "geo", not "judge"');
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("refuses two agents of one name", async () => {
+    const { models, geo } = setup();
+    await expect(
+      openRuntime({ storage: new MemoryStorage(), models, agents: [geo, geo] }),
+    ).rejects.toThrow('two agents are named "geo"');
   });
 });
