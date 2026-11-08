@@ -4,7 +4,7 @@ que-v2's harness, on pi-durable: a workspace defines its agents with `@mku1tra/q
 
 ## Run and check
 
-Node runs in the dev container (`.devcontainer/devcontainer.json`), never on the host. You need `just`, `podman` and `npx`.
+Node runs in the dev container (`.devcontainer/devcontainer.json`), never on the host. You need `just`, `podman` and `npx`. The dev image is built from `.devcontainer/Containerfile` with the npm cache of `package-lock.json`, and the `dev-image` workflow on main builds and pushes it to `ghcr.io/matta-kelly/que-pasa-dev`.
 
 - `just up`: make or start this checkout's dev container
 - `just check`: the check set, `scripts/check.sh`: notes, then types, lint, format, tests and the build. The pre-push hook and the pipeline run the same file

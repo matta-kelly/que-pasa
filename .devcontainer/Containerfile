@@ -1,0 +1,16 @@
+# que-pasa's dev image: Node 22 and the npm cache of its lockfile. No node_modules and no build output:
+# each checkout installs into its own volume from this cache (devcontainer.json's postCreateCommand).
+# Built from the repo's root.
+FROM mcr.microsoft.com/devcontainers/javascript-node:22 AS base
+ENV npm_config_cache=/opt/npm-cache \
+    npm_config_prefer_offline=true
+RUN install -d -o node -g node /opt/npm-cache
+
+FROM base AS bake
+USER node
+COPY --chown=node:node . /tmp/bake
+RUN cd /tmp/bake && npm ci --ignore-scripts
+
+FROM base
+COPY --from=bake --chown=node:node /opt/npm-cache /opt/npm-cache
+LABEL org.opencontainers.image.source=https://github.com/matta-kelly/que-pasa
