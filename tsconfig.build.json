@@ -8,6 +8,6 @@
     "rootDir": ".",
     "outDir": "dist"
   },
-  "include": ["define", "loop"],
+  "include": ["define", "loop", "sandbox"],
   "exclude": ["**/*.test.ts", "**/*.fixture.ts"]
 }

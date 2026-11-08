@@ -17,7 +17,7 @@ sets="notes code"
 # 2. Each set's commands.
 # The repo's notes, against their types.
 set_notes() { npx basis lint; }
-# The code: types, lint, format, tests, and the build another project installs (dist/). A pipeline log is read after the run, so it names each test.
+# The code: types, lint, format, tests, the build another project installs (dist/), and each of its exports from the packed tarball. A pipeline log is read after the run, so it names each test.
 reporter="dot"
 [ -z "${CI:-}" ] || reporter=verbose
 set_code() {
@@ -26,7 +26,8 @@ set_code() {
     npx prettier --check . &&
     scripts/dev-image.test.sh &&
     npx vitest run --reporter="$reporter" &&
-    npm run --silent build
+    npm run --silent build &&
+    scripts/package.test.sh
 }
 
 # 3. The sets a changed file needs. A file no rule names needs every set, so a missing rule runs more, never less.
