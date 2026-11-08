@@ -24,12 +24,14 @@ export { shellBackend, type Exec } from "./shell.ts";
 export type { Ran, Script } from "./process.ts";
 export {
   Sandbox,
+  commandAnswer,
   edit_file,
   execute,
   fileTools,
   glob,
   grep,
   ls,
+  maxAnswer,
   read_file,
   readTools,
   write_file,

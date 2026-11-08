@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { z } from "zod";
 import type { Resource, Tool } from "../define/index.ts";
 import {
+  commandAnswer,
   edit_file,
   execute,
   type FileBackend,
@@ -185,6 +186,15 @@ describe("the file tools", () => {
       /last\n\[Command succeeded with exit code 0\]\n\[Output was truncated due to size limits\]$/,
     );
     expect(answer.length).toBeLessThan(80_200);
+  });
+
+  it("commandAnswer: execute's answer, for a host tool's command", () => {
+    expect(
+      commandAnswer({ output: "ok\n", exitCode: 0, truncated: false }),
+    ).toBe("ok\n[Command succeeded with exit code 0]");
+    expect(commandAnswer({ output: "", exitCode: null, truncated: true })).toBe(
+      "[Command was killed]\n[Output was truncated due to size limits]",
+    );
   });
 
   it("execute: on a backend with no execute, Deep Agents' answer", async () => {

@@ -10,7 +10,12 @@ import {
   type Json,
   type Runtime,
 } from "../define/index.ts";
-import { canExecute, type FileBackend, type Failed } from "./backend.ts";
+import {
+  canExecute,
+  type ExecuteResult,
+  type FileBackend,
+  type Failed,
+} from "./backend.ts";
 
 /** The backend a run's file tools work in: the host provides it per run, such as a container, or a view over one. */
 export const Sandbox = defineResource<FileBackend>("sandbox");
@@ -269,20 +274,27 @@ export const execute = defineTool({
     if (!canExecute(backend)) {
       return "Error: Execution not available. This agent's backend does not support command execution.";
     }
-    const result = await backend.execute(command);
-    const cutTail = result.output.length > maxAnswer;
-    const output = cutTail ? result.output.slice(-maxAnswer) : result.output;
-    const status =
-      result.exitCode === null
-        ? "[Command was killed]"
-        : `[Command ${result.exitCode === 0 ? "succeeded" : "failed"} with exit code ${result.exitCode}]`;
-    const truncated =
-      result.truncated || cutTail
-        ? "\n[Output was truncated due to size limits]"
-        : "";
-    return `${output}${output.endsWith("\n") || output === "" ? "" : "\n"}${status}${truncated}`;
+    return commandAnswer(await backend.execute(command));
   },
 });
+
+/**
+ * What the model reads for a command that ran: the tail of its output, at most `maxAnswer` characters, where a failure
+ * is, then how it ended. `execute`'s answer, for a host tool that runs a command to answer the same way.
+ */
+export function commandAnswer(result: ExecuteResult): string {
+  const cutTail = result.output.length > maxAnswer;
+  const output = cutTail ? result.output.slice(-maxAnswer) : result.output;
+  const status =
+    result.exitCode === null
+      ? "[Command was killed]"
+      : `[Command ${result.exitCode === 0 ? "succeeded" : "failed"} with exit code ${result.exitCode}]`;
+  const truncated =
+    result.truncated || cutTail
+      ? "\n[Output was truncated due to size limits]"
+      : "";
+  return `${output}${output.endsWith("\n") || output === "" ? "" : "\n"}${status}${truncated}`;
+}
 
 /** The tools that only read. */
 export const readTools = [ls, read_file, glob, grep] as const;

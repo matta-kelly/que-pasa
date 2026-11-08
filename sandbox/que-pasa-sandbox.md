@@ -76,7 +76,8 @@ A backend is the place where a run's files are and its commands run, behind one 
 | `execute` | a shell command in the root: its output, then how it ended | never: a command can do anything |
 
 - sets: `readTools` (ls, read_file, glob, grep), `fileTools` (those, write_file and edit_file). `execute` is given on its own
-- an answer is cut at 80,000 characters: a listing at a whole line, a read at a whole line with the offset to go on from, a command's output to its tail, where a failure is
+- an answer is cut at 80,000 characters (`maxAnswer`): a listing at a whole line, a read at a whole line with the offset to go on from, a command's output to its tail, where a failure is
+- `commandAnswer(result)`: `execute`'s answer, so a host tool that runs a command, such as a test, answers the same way
 
 ## Where it differs from Deep Agents
 
