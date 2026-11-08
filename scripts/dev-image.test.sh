@@ -591,6 +591,11 @@ test_the_required_job_cannot_pass_on_a_skip() {
     { [ "$(gate_exit failure success)" -ne 0 ] || miss "the gate: expected non-zero when the image job failed, got 0"; } &&
     { [ "$(gate_exit success failure)" -ne 0 ] || miss "the gate: expected non-zero when the check job failed, got 0"; } &&
     { [ "$(gate_exit failure failure)" -ne 0 ] || miss "the gate: expected non-zero when both failed, got 0"; } &&
+    # A job skipped because the job it needs failed reports skipped, not failure: the gate must fail on it too.
+    { [ "$(gate_exit skipped success)" -ne 0 ] || miss "the gate: expected non-zero when the image job was skipped, got 0"; } &&
+    { [ "$(gate_exit success skipped)" -ne 0 ] || miss "the gate: expected non-zero when the check job was skipped, got 0"; } &&
+    { [ "$(gate_exit skipped skipped)" -ne 0 ] || miss "the gate: expected non-zero when both were skipped, got 0"; } &&
+    { [ "$(gate_exit success cancelled)" -ne 0 ] || miss "the gate: expected non-zero when the check job was cancelled, got 0"; } &&
     pass
 }
 
