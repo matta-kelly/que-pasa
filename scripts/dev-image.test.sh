@@ -494,14 +494,16 @@ test_the_image_job_resolves_the_dev_image() {
   then_is "the workflow file" "present" "$(present)" || return 1
   image=$(job image)
   steps=$(block_in '^    steps:' <<<"$image")
-  login=$(grep -F 'skopeo login ghcr.io' <<<"$steps" || true)
+  # The login's own step, so a TOKEN env on another step cannot stand in for the one the pipe reads.
+  login_step=$(block_in '^      - name: Log in' <<<"$steps")
+  login=$(grep -F 'skopeo login ghcr.io' <<<"$login_step" || true)
   ref=$(block_in '^      - id: image' <<<"$steps")
   ref_write=$(grep -F '>> "$GITHUB_OUTPUT"' <<<"$ref" || true)
   login_at=$(grep -nF 'skopeo login ghcr.io' <<<"$steps" | cut -d: -f1)
   ref_at=$(grep -nF 'id: image' <<<"$steps" | cut -d: -f1)
   then_is "the image job's permissions" "$(printf '%s\n' 'contents: read' 'packages: read')" \
     "$(block_in '^    permissions:' <<<"$image" | sed 's/^ *//' | sort)" &&
-    then_has "the login step's env" 'TOKEN: ${{ secrets.GITHUB_TOKEN }}' "$steps" &&
+    then_has "the login step's env" 'TOKEN: ${{ secrets.GITHUB_TOKEN }}' "$login_step" &&
     # The left side of the pipe is the variable the env line sets: a login that pipes anything else gets a bad
     # password, and the image job fails where this case would have said it was right.
     then_has "the login's pipe" 'printf '\''%s'\'' "$TOKEN" | skopeo login' "$login" &&
@@ -510,7 +512,11 @@ test_the_image_job_resolves_the_dev_image() {
     { [ -n "$login_at" ] && [ -n "$ref_at" ] && [ "$login_at" -lt "$ref_at" ] ||
       miss "the steps: expected the login before the id: image step; got lines [$login_at] [$ref_at]"; } &&
     then_has "the ref step" 'scripts/dev-image.sh ref' "$ref" &&
-    then_has "the ref step's write" 'image=' "$ref_write" &&
+    # The value written is ref's output: either the substitution on the write itself, or a variable set from
+    # ref and then written.
+    { grep -qF 'image=$(scripts/dev-image.sh ref)' <<<"$ref_write" ||
+      { grep -qF 'ref=$(scripts/dev-image.sh ref)' <<<"$ref" && grep -qE 'image=\$\{?ref\}?' <<<"$ref_write"; } ||
+      miss "the ref step's write: expected image= to write dev-image.sh ref's output, got [$ref_write]"; } &&
     then_is "the image job's output" 'image: ${{ steps.image.outputs.image }}' \
       "$(block_in '^    outputs:' <<<"$image" | sed 's/^ *//')" &&
     pass
