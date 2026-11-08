@@ -1,6 +1,6 @@
 # que-pasa
 
-que-v2's harness: it knows no company. A company's workspace defines its agents with `que-pasa/define`, and `que-pasa/loop` runs them. What is built: `que-pasa.md`.
+que-v2's harness, on pi-durable: a workspace defines its agents with `@mku1tra/que-pasa/define`, and `@mku1tra/que-pasa/loop` runs them, durably and traced. It knows no workspace. What is built: `que-pasa.md`.
 
 ## Run and check
 
@@ -15,7 +15,7 @@ Node runs in the dev container (`.devcontainer/devcontainer.json`), never on the
 
 ```ts
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { openRuntime } from "que-pasa/loop";
+import { openRuntime } from "@mku1tra/que-pasa/loop";
 
 const runtime = await openRuntime({ storage: await openNodeSqliteStorage("runs.sqlite"), models, agents: [nail] });
 const result = await runtime.run(nail, input, { runId: attempt.id, caller: { id: "assembly" }, context });
@@ -28,7 +28,11 @@ Each run is traced as OpenTelemetry GenAI spans through `@opentelemetry/api`. To
 
 ## Use it from another project
 
-Install it from its folder, as npm packs it: `"que-pasa": "file:../que-pasa"`, with `install-links=true` in the project's `.npmrc`. It installs `dist/`, so build first: `just run npm run build`, or `just check`. zod is a peer dependency: the project brings it.
+Install it from npm: `npm install @mku1tra/que-pasa zod`. zod is a peer dependency: the project brings it.
+
+## Release
+
+Set the version in `package.json`, commit, land, and push its tag, `v<version>`. `.github/workflows/publish.yml` runs the check set and publishes on npm by trusted publishing (no token, with provenance). A ruleset lets only an admin of the repo make a version tag. A version npm has is not published again. A published version cannot change: npm unpublishes only within 72 hours.
 
 ## Ship
 

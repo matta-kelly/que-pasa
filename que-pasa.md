@@ -76,7 +76,7 @@ How a workspace's agents are reached: a process that runs them.
 ## Seams
 
 What crosses between que-pasa and the outside.
-- a company's repo imports `que-pasa/define` and `que-pasa/loop`, built to `dist/`, from que-pasa's folder (`file:`, `install-links=true`). zod is a peer
+- a company's repo imports `@mku1tra/que-pasa/define` and `@mku1tra/que-pasa/loop`, by its published version on npm. zod is a peer
 - a host gives storage, models and agents, and gets results, usage and conversations
 - spans go out through `@opentelemetry/api` only. The host owns the SDK and where spans go; it records what only it knows on its own span and calls `run()` inside it. Every segment of a run, also after a crash, is in that trace
 - evals (eval2): que-pasa gives them traces and runs; grading is theirs
