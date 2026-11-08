@@ -44,7 +44,7 @@ The sandbox wraps the tools' effects; the agent stays in the host process.
 ## The backend
 
 A backend is the place where a run's files are and its commands run, behind one interface (`sandbox/backend.ts`). Two abilities, as Deep Agents' protocol has them:
-- files (`FileBackend`): `ls`, `read`, `write`, `edit`, `glob`, `grep` (literal text, not a pattern)
+- files (`FileBackend`): `ls`, `read`, `write`, `edit`, `glob`, `grep` (literal text, not a pattern). A listing and a search come back by path, so the order is the same on any file system
 - commands (`SandboxBackend`): files, plus `execute` and an `id`
 - one path rule for every backend (`sandbox/paths.ts`): a path is relative to the backend's root or absolute under it; any other is `invalid_path`. Every path a result gives is relative to the root
 - a backend gives its errors back in the result: `file_not_found`, `is_directory`, `invalid_path`, `permission_denied`, and an edit's `string_not_found` and `string_not_unique`. It throws only when it cannot run at all, such as a read-only file system

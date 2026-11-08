@@ -61,7 +61,7 @@ export interface FileBackend {
   ): Promise<EditResult>;
   /** The files under a folder whose path from that folder matches a glob. */
   glob(pattern: string, path: string): Promise<GlobResult>;
-  /** The lines of the files under a path that hold a text, as is (not a pattern), in files matching `glob` if given. */
+  /** The lines of the files under a path that hold a text, as is (not a pattern), in files matching `glob` if given: by path, then line. */
   grep(pattern: string, path: string, glob?: string): Promise<GrepResult>;
 }
 

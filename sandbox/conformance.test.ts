@@ -197,15 +197,12 @@ describe.each(backends)("the %s backend", (name, make, runs) => {
       expect(await b().glob("*", "nope")).toEqual({ error: "file_not_found" });
     });
 
-    it("greps a literal text, with .git left out, and a file whose name holds a colon", async () => {
-      expect((await b().grep("const", ".")).matches).toEqual(
-        expect.arrayContaining([
-          { path: "src/a.ts", line: 1, text: "const a = 1;" },
-          { path: "src/lib/b.ts", line: 1, text: "const b = 2;" },
-          { path: "src/x:1.ts", line: 1, text: "const x = 3;" },
-        ]),
-      );
-      expect((await b().grep("const", ".")).matches).toHaveLength(3);
+    it("greps a literal text, by path, with .git left out, and a file whose name holds a colon", async () => {
+      expect((await b().grep("const", ".")).matches).toEqual([
+        { path: "src/a.ts", line: 1, text: "const a = 1;" },
+        { path: "src/lib/b.ts", line: 1, text: "const b = 2;" },
+        { path: "src/x:1.ts", line: 1, text: "const x = 3;" },
+      ]);
       expect((await b().grep("const", "src", "*.ts")).matches).toHaveLength(2);
       expect((await b().grep("a.*", ".")).matches).toEqual([]);
       expect((await b().grep("hello\nworld", ".")).matches).toEqual([]);

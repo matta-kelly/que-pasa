@@ -175,6 +175,8 @@ else exit ${missing}; fi`,
       if (at === undefined) return invalid;
       const files = glob ? await matching(at, glob) : await filesUnder(at);
       if (!files) return { error: "file_not_found" };
+      // By path, then line, as glob lists them: the same order on any file system.
+      files.sort();
       // No line holds a newline, so a text with one is in no file.
       if (pattern.includes("\n")) return { matches: [] };
       const matches: GrepMatch[] = [];
