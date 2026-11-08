@@ -3,9 +3,9 @@
 # shellcheck disable=SC2312 # An assertion reads a command's output; its exit is the assertion's, not the command's.
 # shellcheck disable=SC2016 # The workflow cases hold GitHub's expressions as text: a pattern is literal.
 # The tests of scripts/dev-image.sh and of the workflows that call it, on one machine, with no image, no
-# registry and no network. Each script case
-# case makes a temp git repo that holds the three inputs and a copy of the script, and puts stand-in
-# `skopeo` and `podman` first on PATH. Each stand-in appends its arguments as one line to $T/calls.
+# registry and no network. Each script case makes a temp git repo that holds the three inputs and a copy of
+# the script, and puts stand-in `skopeo` and `podman` first on PATH. Each stand-in appends its arguments as
+# one line to $T/calls.
 # The registry is $T/registry, one `<tag> <digest>` per line: `skopeo inspect` answers a tag listed
 # there, and `skopeo copy` and `podman push` add their target tag to it. This machine's store is
 # $T/local, one tag per line: `podman build -t`, `podman tag` and `podman pull` add a tag, `podman
@@ -495,18 +495,22 @@ test_the_image_job_resolves_the_dev_image() {
   image=$(job image)
   steps=$(block_in '^    steps:' <<<"$image")
   login=$(grep -F 'skopeo login ghcr.io' <<<"$steps" || true)
-  ref=$(grep -F 'scripts/dev-image.sh ref' <<<"$steps" || true)
+  ref=$(block_in '^      - id: image' <<<"$steps")
+  ref_write=$(grep -F '>> "$GITHUB_OUTPUT"' <<<"$ref" || true)
   login_at=$(grep -nF 'skopeo login ghcr.io' <<<"$steps" | cut -d: -f1)
   ref_at=$(grep -nF 'id: image' <<<"$steps" | cut -d: -f1)
   then_is "the image job's permissions" "$(printf '%s\n' 'contents: read' 'packages: read')" \
     "$(block_in '^    permissions:' <<<"$image" | sed 's/^ *//' | sort)" &&
     then_has "the login step's env" 'TOKEN: ${{ secrets.GITHUB_TOKEN }}' "$steps" &&
+    # The left side of the pipe is the variable the env line sets: a login that pipes anything else gets a bad
+    # password, and the image job fails where this case would have said it was right.
+    then_has "the login's pipe" 'printf '\''%s'\'' "$TOKEN" | skopeo login' "$login" &&
     then_has "the login" '| skopeo login ghcr.io --username "${{ github.actor }}" --password-stdin' "$login" &&
     then_lacks "the login" '--password ' "$login" &&
     { [ -n "$login_at" ] && [ -n "$ref_at" ] && [ "$login_at" -lt "$ref_at" ] ||
       miss "the steps: expected the login before the id: image step; got lines [$login_at] [$ref_at]"; } &&
-    then_has "the ref step" 'image=$(' "$ref" &&
-    then_has "the ref step" 'GITHUB_OUTPUT' "$ref" &&
+    then_has "the ref step" 'scripts/dev-image.sh ref' "$ref" &&
+    then_has "the ref step's write" 'image=' "$ref_write" &&
     then_is "the image job's output" 'image: ${{ steps.image.outputs.image }}' \
       "$(block_in '^    outputs:' <<<"$image" | sed 's/^ *//')" &&
     pass
@@ -543,8 +547,14 @@ test_the_check_runs_as_node_over_a_checkout_node_owns() {
   given_workflow checks.yml || fail "setup: the case's folder"
   then_is "the workflow file" "present" "$(present)" || return 1
   steps=$(job check | block_in '^    steps:')
+  checkout_at=$(grep -nF 'uses: actions/checkout@' <<<"$steps" | cut -d: -f1)
+  chown_at=$(grep -nF 'chown -R node:node' <<<"$steps" | cut -d: -f1)
   then_has "the check step" 'run: chown -R node:node "$GITHUB_WORKSPACE" && runuser -u node -- env HOME=/home/node scripts/check.sh' "$steps" &&
     then_lacks "the steps" 'run: scripts/check.sh' "$steps" &&
+    # A chown before the checkout hands over nothing: the checkout lands after it, root-owned, and node's git
+    # refuses it as dubious ownership.
+    { [ -n "$checkout_at" ] && [ -n "$chown_at" ] && [ "$checkout_at" -lt "$chown_at" ] ||
+      miss "the steps: expected the checkout before the chown; got lines [$checkout_at] [$chown_at]"; } &&
     pass
 }
 
