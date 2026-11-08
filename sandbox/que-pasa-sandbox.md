@@ -38,6 +38,7 @@ The sandbox wraps the tools' effects; the agent stays in the host process.
 
 - local is for the host's own trusted work, and tests
 - a view checks names only, so it is a wall only over a backend that is one: a container whose mounts hold no more than its folder
+- a view's search reads the files under the path searched, inside the backend, and gives back only its own: a wall below it keeps the rest out
 - a view has no execute: a shell reaches any path (Deep Agents: path rules "provide no security with shell access")
 
 ## The backend
@@ -59,7 +60,7 @@ A backend is the place where a run's files are and its commands run, behind one 
 	- `network` is "none" by default; `close()` removes it
 - `view(backend, { read, write })`: a files backend over another, limited to some files
 	- a path outside it is answered as missing; a write outside its write files is refused, with the files it may write
-	- its search reads only its own files, and leaves out `.git`, as a backend's does
+	- its search runs once on the backend, and keeps only its own files, as Deep Agents filters its path rules' results. The backend reads the files under the path to search them, and its limit counts them too, so a cut result says it is cut
 
 ## The tools
 

@@ -1,5 +1,4 @@
-import { posix } from "node:path";
-import type { FileBackend, GrepMatch } from "./backend.ts";
+import type { FileBackend } from "./backend.ts";
 import { fromRoot, isUnder } from "./paths.ts";
 
 /** The files a view holds: paths from the backend's root, or absolute under it. */
@@ -28,6 +27,7 @@ export function view(backend: FileBackend, paths: ViewPaths): FileBackend {
     });
   const writes = new Set(checked(paths.write));
   const files = [...new Set([...checked(paths.read), ...writes])];
+  const mine = new Set(files);
 
   /** A path of the view: one of its files, or a folder on the way to one. */
   const sees = (at: string) => files.some((f) => f === at || isUnder(f, at));
@@ -35,29 +35,8 @@ export function view(backend: FileBackend, paths: ViewPaths): FileBackend {
   const at = (path: string) => fromRoot(root, path);
   const missing = { error: "file_not_found" } as const;
   const invalid = { error: "invalid_path" } as const;
-  /** The view's files under a folder whose path from it matches a glob: its own list, never the folder's. */
-  const under = (folder: string, glob?: string) =>
-    files.filter((f) => {
-      // A search leaves out .git, as a backend's does.
-      if (!isUnder(f, folder) || f.split("/").includes(".git")) return false;
-      const from =
-        f === folder
-          ? posix.basename(f)
-          : folder
-            ? f.slice(folder.length + 1)
-            : f;
-      return glob === undefined || posix.matchesGlob(from, glob);
-    });
-  /** Which of the files are there: a write file can be one not made yet. */
-  const present = async (list: string[]) => {
-    const there = await Promise.all(
-      list.map(async (f) => {
-        const listed = await backend.ls(f);
-        return listed.files?.some((e) => e.path === f && !e.isDir) ?? false;
-      }),
-    );
-    return list.filter((_, i) => there[i]);
-  };
+  /** A path the backend gave back that is one of the view's files. */
+  const own = (path: string) => mine.has(path);
   const refused = (path: string) => ({
     error: "permission_denied" as const,
     message: `${path} is not a file this view may write: it may write ${[...writes].join(", ") || "none"}`,
@@ -89,23 +68,23 @@ export function view(backend: FileBackend, paths: ViewPaths): FileBackend {
       if (p === undefined) return invalid;
       return writes.has(p) ? backend.edit(path, old, next, all) : refused(path);
     },
+    // A search runs once on the backend, and the view keeps its own files: Deep Agents filters its path rules' results
+    // the same way. The backend's limit counts files outside the view too, so a cut result says it is cut.
     async glob(pattern, path) {
       const p = at(path);
       if (p === undefined) return invalid;
       if (!sees(p)) return missing;
-      return { files: (await present(under(p, pattern))).sort() };
+      const found = await backend.glob(pattern, path);
+      return found.files ? { ...found, files: found.files.filter(own) } : found;
     },
     async grep(pattern, path, glob) {
       const p = at(path);
       if (p === undefined) return invalid;
       if (!sees(p)) return missing;
-      // Each of its files on its own, so files outside the view are never read.
-      const matches: GrepMatch[] = [];
-      for (const f of (await present(under(p, glob))).sort()) {
-        const found = await backend.grep(pattern, f);
-        matches.push(...(found.matches ?? []));
-      }
-      return { matches };
+      const found = await backend.grep(pattern, path, glob);
+      return found.matches
+        ? { ...found, matches: found.matches.filter((m) => own(m.path)) }
+        : found;
     },
   };
 }

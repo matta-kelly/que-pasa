@@ -59,6 +59,34 @@ describe("a view", () => {
     ).toEqual(["README", "src/b.ts", "src/lib/a.ts"]);
   });
 
+  it("searches in one backend call, and keeps its own files and the backend's cut", async () => {
+    const calls: string[] = [];
+    const counted: FileBackend = {
+      ...free,
+      glob: async (...a) => (calls.push("glob"), free.glob(...a)),
+      grep: async (...a) => {
+        calls.push("grep");
+        return { ...(await free.grep(...a)), truncated: true };
+      },
+    };
+    const one = view(counted, {
+      read: ["src/b.ts", "src/lib/a.ts"],
+      write: [],
+    });
+    expect(await one.grep("const", "src")).toEqual({
+      matches: [
+        { path: "src/b.ts", line: 1, text: "const b = 1;" },
+        { path: "src/lib/a.ts", line: 1, text: "const a = 3;" },
+      ],
+      truncated: true,
+    });
+    expect((await one.glob("**/*.ts", "src")).files?.sort()).toEqual([
+      "src/b.ts",
+      "src/lib/a.ts",
+    ]);
+    expect(calls).toEqual(["grep", "glob"]);
+  });
+
   it("writes its write files, and a write file not made yet, and refuses any other, saying which it may write", async () => {
     expect(await bound.write("src/b.ts", "x\n")).toEqual({ path: "src/b.ts" });
     expect(await bound.write("test/b.test.ts", "t\n")).toEqual({
