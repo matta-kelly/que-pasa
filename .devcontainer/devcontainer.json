@@ -2,7 +2,12 @@
 // the folder is a notes vault whose indexer reads every file.
 {
   "name": "que-pasa",
-  "image": "mcr.microsoft.com/devcontainers/javascript-node:22",
+  // The dev image carries the npm cache of package-lock.json, so a fresh install fetches almost nothing.
+  // The tag moves on main, and the CLI never pulls a tag it has: initializeCommand pulls it first, on the
+  // host, before the CLI resolves the image, for VS Code and `just` alike. A failed pull says so and the
+  // machine's copy is used; with no copy, the CLI's own pull fails and says why.
+  "image": "ghcr.io/matta-kelly/que-pasa-dev:main",
+  "initializeCommand": "podman pull ghcr.io/matta-kelly/que-pasa-dev:main || echo 'could not pull ghcr.io/matta-kelly/que-pasa-dev:main: the copy this machine has is used' >&2",
 
   // Mount the repo at its host path, so absolute paths in caches and tool output
   // mean the same thing inside the container and out.
@@ -28,7 +33,8 @@
     "source=que-pasa-node-modules-${devcontainerId},target=${containerWorkspaceFolder}/node_modules,type=volume"
   ],
 
-  // A new volume starts root-owned: hand it to `node`, then install.
+  // A new volume starts root-owned: hand it to `node`, then install. The install reads the image's npm
+  // cache (npm_config_prefer_offline=true), so it fetches almost nothing.
   "postCreateCommand": "sudo chown node:node node_modules && npm ci",
 
   "customizations": {
