@@ -8,11 +8,21 @@ import {
 } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { defineAgent, defineTool, type Runtime } from "../define/index.ts";
+import {
+  defineAgent,
+  defineResource,
+  defineTool,
+  type Runtime,
+} from "../define/index.ts";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import type { Models } from "@earendil-works/pi-ai";
 import type { Json, Agent } from "../define/index.ts";
-import { openRuntime, type RunOptions, type RunUsage } from "./index.ts";
+import {
+  openRuntime,
+  provide,
+  type RunOptions,
+  type RunUsage,
+} from "./index.ts";
 import { scripted } from "./scripted.fixture.ts";
 
 const caller = { id: "matt" };
@@ -785,5 +795,167 @@ describe("a run's model", () => {
     await expect(
       once(geo, "Hi", { caller, models, model: "fallback" }),
     ).rejects.toThrow('the model must be "provider:model-id", not "fallback"');
+  });
+});
+
+describe("a run's resources", () => {
+  const box = defineResource<{ root: string }>("box");
+  const where = defineTool({
+    name: "where",
+    description: "Say where the box is.",
+    schema: z.object({}),
+    uses: [box],
+    run: async (_input, runtime: Runtime<{ root: string }>) =>
+      (await runtime.use(box)).root,
+  });
+  const twice = () => [
+    fauxAssistantMessage([fauxToolCall("where", {})], {
+      stopReason: "toolUse",
+    }),
+    fauxAssistantMessage([fauxToolCall("where", {})], {
+      stopReason: "toolUse",
+    }),
+    fauxAssistantMessage([fauxText("Done.")]),
+  ];
+
+  it("are resolved by the host from the run, once per run, and given to its tools", async () => {
+    const { faux, models, model } = scripted();
+    faux.setResponses(twice());
+    const agent = defineAgent({
+      name: "boxed",
+      model,
+      instructions: "Say where.",
+      tools: [where],
+    });
+    const seen: string[] = [];
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [agent],
+      resources: [
+        provide(box, ({ runId, caller, context }) => {
+          seen.push(`${runId} ${caller.id} ${JSON.stringify(context)}`);
+          return { root: (context as { root: string }).root };
+        }),
+      ],
+    });
+    let messages: Message[] = [];
+    try {
+      await runtime.run(agent, "Where?", {
+        runId: "run-1",
+        caller,
+        context: { root: "/work" },
+        onMessages: (all) => (messages = all),
+      });
+    } finally {
+      await runtime.close();
+    }
+    expect(seen).toEqual(['run-1 matt {"root":"/work"}']);
+    const results = messages.filter((m) => m.role === "toolResult");
+    expect(results.map((m) => JSON.stringify(m.content))).toEqual([
+      expect.stringContaining("/work"),
+      expect.stringContaining("/work"),
+    ]);
+  });
+
+  it("are refused at open when a tool uses one the host does not provide", async () => {
+    const { models, model } = scripted();
+    const agent = defineAgent({
+      name: "boxed",
+      model,
+      instructions: "Say where.",
+      tools: [where],
+    });
+    await expect(
+      openRuntime({ storage: new MemoryStorage(), models, agents: [agent] }),
+    ).rejects.toThrow(
+      'tool "where" uses resource "box", which is not provided',
+    );
+  });
+
+  it("are refused to a tool that does not declare it", async () => {
+    const { faux, models, model } = scripted();
+    const sneaky = defineTool({
+      name: "where",
+      description: "Say where the box is.",
+      schema: z.object({}),
+      run: async (_input, runtime) => (await runtime.use(box)).root,
+    });
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("where", {})], {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage([fauxText("Done.")]),
+    ]);
+    const agent = defineAgent({
+      name: "boxed",
+      model,
+      instructions: "Say where.",
+      tools: [sneaky],
+    });
+    let messages: Message[] = [];
+    await once(agent, "Where?", {
+      caller,
+      models,
+      onMessages: (all) => (messages = all),
+    });
+    const result = messages.find((m) => m.role === "toolResult");
+    expect(result?.isError).toBe(true);
+    expect(JSON.stringify(result?.content)).toContain(
+      "which it does not declare in uses",
+    );
+  });
+
+  it("are refused when one is provided twice", async () => {
+    const { models } = scripted();
+    await expect(
+      openRuntime({
+        storage: new MemoryStorage(),
+        models,
+        agents: [],
+        resources: [
+          provide(box, () => ({ root: "a" })),
+          provide(box, () => ({ root: "b" })),
+        ],
+      }),
+    ).rejects.toThrow('resource "box" is provided twice');
+  });
+
+  it("are resolved again after a resolve that failed", async () => {
+    const { faux, models, model } = scripted();
+    faux.setResponses(twice());
+    const agent = defineAgent({
+      name: "boxed",
+      model,
+      instructions: "Say where.",
+      tools: [where],
+    });
+    let calls = 0;
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [agent],
+      resources: [
+        provide(box, () => {
+          calls += 1;
+          if (calls === 1) throw new Error("not up yet");
+          return { root: "/work" };
+        }),
+      ],
+    });
+    let messages: Message[] = [];
+    try {
+      await runtime.run(agent, "Where?", {
+        runId: "run-1",
+        caller,
+        context: { root: "/work" },
+        onMessages: (all) => (messages = all),
+      });
+    } finally {
+      await runtime.close();
+    }
+    const results = messages.filter((m) => m.role === "toolResult");
+    expect(results.map((m) => m.isError)).toEqual([true, false]);
+    expect(calls).toBe(2);
   });
 });

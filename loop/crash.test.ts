@@ -132,6 +132,12 @@ describe("a run killed at a crash point and opened again in a new process", () =
     expect(seen.calls).toBe(1);
   });
 
+  it("killed mid tool: the new process resolves the run's resources from the context the run was started with", async () => {
+    const seen = await crashAndResume("resource");
+    expect(seen.value).toEqual(done);
+    expect(seen.ran).toEqual(["first in first", "first in second"]);
+  });
+
   it("killed mid replay-safe tool as often as pi's restart limit: the tool stops, and the model gets it as an error", async () => {
     const seen = await crashAndResume("safe-tool", 5);
     expect(seen.value).toEqual(done);

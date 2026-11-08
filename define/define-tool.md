@@ -1,11 +1,11 @@
 ---
 type: component
-description: "A que-pasa tool: a function an agent can call, written once in a workspace, which reads its login through a connection and never holds one. Read for what a tool is, how it reaches an outside system safely, how a run calls it, and what is not built: connections and approvals."
+description: "A que-pasa tool: a function an agent can call, written once in a workspace, which gets what it acts on (a sandbox, a login) from its run as a resource and never holds it. Read for what a tool is, how it reaches an outside system safely, how a run calls it, and what is not built: connections and approvals."
 status: running
 ---
-A function an agent can call: written once in a company's workspace, so any agent in it can be given it. The code is `defineTool`, in `define/tool.ts`.
+A function an agent can call: written once in a workspace, so any agent in it can be given it. The code is `defineTool`, in `define/tool.ts`.
 - [[#What a tool is]] its definition, and what it gets from a run
-- [[#Reaching an outside system]] its connection, and what keeps it safe
+- [[#Reaching an outside system]] its resources, and what keeps it safe
 - [[#Approval]] whether a person says yes before it runs
 - [[#How a run calls it]] in the loop, across a crash, and in the trace
 
@@ -21,20 +21,23 @@ A tool is a name, a description, the input it takes and what it does; it gets wh
 	- description: what it does and when to call it; the model reads it to choose
 	- schema: the input the model must give, a zod object
 	- `run(input, runtime)`: what it does
-	- connection: the name of the connection it reads, if any
+	- uses: the resources it asks its run for, if any (see [[#Reaching an outside system]])
 	- `replay: "safe"`: a call a crash cut off may run again (see [[#How a run calls it]])
-- what it gets from a run: `runtime.caller`, who the run acts for, and `runtime.context`, the JSON the host gave the run
+- what it gets from a run: `runtime.caller`, who the run acts for, `runtime.context`, the JSON the host gave the run, and `runtime.use(resource)`, the run's value of a resource it uses
 	- both come from the run's document, never from the tool's arguments, so the model cannot say whom it acts for
 	- an agent calling another agent passes the caller through the run, not through a tool's arguments. Not built
 - an agent is given its tools explicitly, and can call those and no others
 
 ## Reaching an outside system
 
-A tool reaches an outside system (Odoo and others) with a connection's login, and the target system decides what that login may do.
-- a tool names the connection it needs and reads it by name at call time, with the credential of the run's caller or of the agent. Not built
-- a tool never holds a credential, and no credential enters the model's context
+A tool reaches what it acts on through a resource, which the host gives each run; the tool never holds it.
+- resource (`defineResource`): something a tool needs that the host gives each run, such as a sandbox ([[que-pasa-sandbox]]), or a login
+	- a tool names the resources it uses in `uses`, and asks for one with `runtime.use(resource)`; any other throws
+	- the host provides each one when it opens the runtime: `provide(resource, (run) => value)`, from the run's id, caller and context. A tool that uses one the host does not provide fails the runtime's open, never a run
+	- the value is resolved once per run in a process, from the run as it was started: a run that resumes in a new process gets the same one
+- a connection is a resource that holds a login: the run's caller's, or the agent's own. A tool never holds a credential, and none enters the model's context. Not built: no connection resolves a login yet
 - permissions are held at the tool and at the target system, never trusted to the agent
-	- hiding a tool keeps an agent on task; the login keeps it safe
+	- hiding a tool keeps an agent on task; the login, or the sandbox's wall, keeps it safe
 
 ## Approval
 

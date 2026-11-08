@@ -25,10 +25,16 @@ import {
   TracerProvider,
 } from "@opentelemetry/sdk-trace";
 import { z } from "zod";
-import { defineAgent, defineTool, type Runtime } from "../define/index.ts";
-import { openRuntime } from "./index.ts";
+import {
+  defineAgent,
+  defineResource,
+  defineTool,
+  type Runtime,
+} from "../define/index.ts";
+import { openRuntime, provide } from "./index.ts";
 
-type Scenario = "model" | "unsafe-tool" | "safe-tool" | "after-submit";
+type Scenario =
+  "model" | "unsafe-tool" | "safe-tool" | "resource" | "after-submit";
 const [scenario, phase, file, log, spans] = process.argv.slice(2) as [
   Scenario,
   "first" | "second",
@@ -80,14 +86,25 @@ const submit = fauxAssistantMessage(
   },
 );
 
-/** The step tool: it logs each run of itself with the context its run was given, and in the first phase waits there. */
+/** What the host provides each run: resolved from the context the run was started with, and named by this process. */
+const tag = defineResource<string>("tag");
+
+/**
+ * The step tool: it logs each run of itself with the context its run was given, or in the resource scenario with the
+ * run's resource, and in the first phase waits there.
+ */
 const step = defineTool({
   name: "step",
   description: "Do the step.",
   schema: z.object({}),
-  ...(scenario === "safe-tool" ? { replay: "safe" as const } : {}),
+  uses: [tag],
+  ...(scenario === "safe-tool" || scenario === "resource"
+    ? { replay: "safe" as const }
+    : {}),
   run: async (_input, runtime: Runtime<{ tag: string }>) => {
-    appendFileSync(log, `${runtime.context.tag}\n`);
+    const seen =
+      scenario === "resource" ? await runtime.use(tag) : runtime.context.tag;
+    appendFileSync(log, `${seen}\n`);
     return phase === "first" ? crashPoint() : "stepped";
   },
 });
@@ -120,6 +137,11 @@ faux.setResponses(
             stopReason: "toolUse",
           }),
         ],
+        resource: [
+          fauxAssistantMessage([fauxToolCall("step", {})], {
+            stopReason: "toolUse",
+          }),
+        ],
         "after-submit": [submit],
       }[scenario],
 );
@@ -128,6 +150,12 @@ const runtime = await openRuntime({
   storage: await openNodeSqliteStorage(file),
   models,
   agents: [agent],
+  resources: [
+    provide(
+      tag,
+      ({ context }) => `${(context as { tag: string }).tag} in ${phase}`,
+    ),
+  ],
 });
 let messages: Message[] = [];
 const go = () =>

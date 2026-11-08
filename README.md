@@ -24,6 +24,25 @@ await runtime.close();
 
 One runtime per process owns its SQLite file. After a crash, open it again with the same agents: unfinished runs go on, and `run` with the same `runId` gives back the result.
 
+A tool gets what it acts on from its run, as a resource the host provides. The file and command tools of `@mku1tra/que-pasa/sandbox` act in the `Sandbox` the host gives each run:
+
+```ts
+import { provide } from "@mku1tra/que-pasa/loop";
+import { Sandbox, execute, fileTools, podman, view } from "@mku1tra/que-pasa/sandbox";
+
+const coder = defineAgent({ name: "coder", model, instructions, tools: [...fileTools, execute] });
+const runtime = await openRuntime({
+  storage, models, agents: [coder],
+  resources: [
+    provide(Sandbox, ({ runId }) =>
+      podman({ name: `run-${runId}`, image: "node:22", mounts: [{ source: worktree, target: "/work" }] }),
+    ),
+  ],
+});
+```
+
+A provider resolves from the run as it was started, so a run that resumes after a crash gets the same sandbox. `view(backend, { read, write })` limits a run to some files. What each backend's wall stops: `sandbox/que-pasa-sandbox.md`.
+
 Each run is traced as OpenTelemetry GenAI spans through `@opentelemetry/api`. To keep them, register an SDK (a tracer provider, an exporter, and an async context manager). To add what only the host knows, call `runtime.run()` inside a span of its own. `captureContent: true` on `openRuntime` adds message content.
 
 ## Use it from another project

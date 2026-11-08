@@ -1,24 +1,28 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { defineAgent, defineTool } from "./index.ts";
+import { defineAgent, defineResource, defineTool } from "./index.ts";
 
 const caller = { id: "matt" };
+const odoo = defineResource<{ login: string }>("odoo");
+const runtime = {
+  caller,
+  context: undefined,
+  use: () => Promise.reject(new Error("no resources here")),
+};
 
 const products = defineTool({
   name: "read_products",
   description: "Read products by SKU.",
   schema: z.object({ sku: z.string() }),
-  connection: "odoo",
+  uses: [odoo],
   run: ({ sku }, runtime) => `${sku} for ${runtime.caller.id}`,
 });
 
 describe("defineTool", () => {
   it("gives back the tool, and its run takes the input and the runtime", () => {
     expect(products.name).toBe("read_products");
-    expect(products.connection).toBe("odoo");
-    expect(products.run({ sku: "A1" }, { caller, context: undefined })).toBe(
-      "A1 for matt",
-    );
+    expect(products.uses).toEqual([odoo]);
+    expect(products.run({ sku: "A1" }, runtime)).toBe("A1 for matt");
   });
 
   it.each(["readProducts", "read-products", "1read", "", "a".repeat(65)])(
@@ -34,21 +38,34 @@ describe("defineTool", () => {
     );
   });
 
-  it("refuses an empty connection name", () => {
-    expect(() => defineTool({ ...products, connection: "" })).toThrow(
-      "connection name is empty",
+  it("refuses a resource in uses twice", () => {
+    expect(() => defineTool({ ...products, uses: [odoo, odoo] })).toThrow(
+      "in uses twice",
     );
   });
 
-  it("takes a tool with no connection", () => {
+  it("takes a tool that uses no resource", () => {
     const tool = defineTool({
       name: "now",
       description: "The time now.",
       schema: z.object({}),
       run: () => Date.now(),
     });
-    expect(tool.connection).toBeUndefined();
+    expect(tool.uses).toBeUndefined();
   });
+});
+
+describe("defineResource", () => {
+  it("gives back a resource with its name", () => {
+    expect(odoo.name).toBe("odoo");
+  });
+
+  it.each(["Odoo", "odoo_login", "1odoo", ""])(
+    "refuses the name %j",
+    (name) => {
+      expect(() => defineResource(name)).toThrow("kebab-case");
+    },
+  );
 });
 
 const salesRep = {

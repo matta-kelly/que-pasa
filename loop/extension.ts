@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { z } from "zod";
 import type { Agent, Json, Runtime, Tool } from "../define/index.ts";
+import type { Resources } from "./resources.ts";
 import { RunDoc } from "./state.ts";
 import { messagesOf, resultOf, userText } from "./transcript.ts";
 
@@ -33,14 +34,17 @@ export const extensionName = (agent: AnyAgent) => `agent-${agent.name}`;
  * no run's state: each call reads its run's document and transcript, so it serves every run of the agent, also one that
  * resumes in a new process.
  */
-export function agentExtension(agent: AnyAgent): Extension {
+export function agentExtension(
+  agent: AnyAgent,
+  resources: Resources,
+): Extension {
   const { output } = agent;
   if (output && agent.tools.some((tool) => tool.name === submitTool)) {
     throw new Error(
       `agent "${agent.name}": a tool is named "${submitTool}", which its output needs`,
     );
   }
-  const tools = agent.tools.map(toPiTool);
+  const tools = agent.tools.map((tool) => toPiTool(tool, resources));
   if (output) tools.push(submit(output));
   return defineExtension({
     name: extensionName(agent),
@@ -50,7 +54,10 @@ export function agentExtension(agent: AnyAgent): Extension {
 }
 
 /** A que-pasa tool as a pi tool: pi checks the arguments against the JSON Schema, zod parses them, and the run's runtime goes in. */
-function toPiTool(tool: Tool<z.ZodObject, Json | undefined>) {
+function toPiTool(
+  tool: Tool<z.ZodObject, Json | undefined>,
+  resources: Resources,
+) {
   return definePiTool({
     name: tool.name,
     description: tool.description,
@@ -59,7 +66,7 @@ function toPiTool(tool: Tool<z.ZodObject, Json | undefined>) {
     execute: async (args, api, context) => {
       const result = await tool.run(
         tool.schema.parse(args),
-        await runtimeOf(api, context),
+        await runtimeOf(tool, resources, api, context),
       );
       return {
         output: [
@@ -100,14 +107,28 @@ const remind = hook(GenerationTask, {
   },
 });
 
-/** The runtime of the call's run, from its run document. */
+/** The runtime of the call's run, from its run document: its caller, its context, and the resources the tool uses. */
 async function runtimeOf(
+  tool: Tool<z.ZodObject, Json | undefined>,
+  resources: Resources,
   api: DocumentReader & { readonly conversationId: ConversationId },
   context: Context,
 ): Promise<Runtime<Json | undefined>> {
   const run = await api.snapshot(RunDoc, api.conversationId, context);
   if (!run) throw new Error("the run has no run document");
-  return { caller: run.caller, context: run.context };
+  const uses = new Set((tool.uses ?? []).map((resource) => resource.name));
+  return {
+    caller: run.caller,
+    context: run.context,
+    use: async (resource) => {
+      if (!uses.has(resource.name)) {
+        throw new Error(
+          `tool "${tool.name}" uses resource "${resource.name}", which it does not declare in uses`,
+        );
+      }
+      return resources.use(run, resource);
+    },
+  };
 }
 
 /**

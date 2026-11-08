@@ -34,7 +34,7 @@ while True:
 ```
 
 - durable execution: a log kept so that a run goes on from where it stopped. Approval gates and idempotency are not two items but this one pillar: an approval gate is durability holding state while a person decides, and idempotency is what durability needs to replay safely
-- in que-pasa the log is pi-durable's conversation, kept in the host's storage. `build` is the agent's instructions and tools; `run` is its tools, and, not built, middleware
+- in que-pasa the log is pi-durable's conversation, kept in the host's storage. `build` is the agent's instructions and tools; `run` is its tools, the resources the host gives them, and, not built, middleware
 
 ## States
 
@@ -61,13 +61,14 @@ What holds in every state of every run. Each is held by construction, and checke
 | no run state in memory: a new process can go on with any run | the caller, context and model in the run document; the result and the reminders in the transcript | `crash.test.ts`: every crash point, in a new process |
 | a finished step is never done twice | pi's checkpoint per step; a tool not marked `replay: "safe"` never runs again | `crash.test.ts`: mid tool, mid model request, after the submit |
 | a run keeps what it was started with: input, caller, model, context | the run document, written once, in the commit that makes the run | `runtime.test.ts`: a run started again with another model |
+| a run's tools get the same resources in every process | a provider resolves from the run document, never from memory; once per run in a process | `crash.test.ts`: the resumed process resolves from the stored context |
 | the result is the last submit that passed the schema | the submit tool parses with zod before it keeps the result; a failed parse goes back to the model | `runtime.test.ts`: a bad submit, then a good one |
 | every segment of a run is in one trace | the run document keeps the span the run started in, or its first segment | `crash.test.ts`: the resumed segment under the host's span |
 | tracing never fails a run | each hook's tracing runs guarded; an error goes to OpenTelemetry's `diag` | the whole suite runs with and without an SDK |
 
 ## After a crash
 
-One runtime per process owns its storage: `openRuntime({ storage, models, agents, captureContent })`, with `openNodeSqliteStorage(file)` to keep runs, or `MemoryStorage` to keep none. Each agent is its own extension, named `agent-<name>`, so a run that resumes finds its code; runs a crash left go on at once.
+One runtime per process owns its storage: `openRuntime({ storage, models, agents, resources, captureContent })`, with `openNodeSqliteStorage(file)` to keep runs, or `MemoryStorage` to keep none. Each agent is its own extension, named `agent-<name>`, so a run that resumes finds its code; runs a crash left go on at once.
 
 | Crash point | What pi does | What holds |
 |---|---|---|

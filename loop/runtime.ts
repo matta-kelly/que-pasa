@@ -22,6 +22,7 @@ import {
   parseModel,
 } from "../define/index.ts";
 import { type AnyAgent, agentExtension, submitTool } from "./extension.ts";
+import { createResources, type Provider } from "./resources.ts";
 import { RunDoc, RunIndex, type RunState } from "./state.ts";
 import { activeParent, createTracing } from "./trace.ts";
 import { answerOf, messagesOf, resultOf } from "./transcript.ts";
@@ -40,6 +41,11 @@ export type RuntimeOptions = {
   models: Models;
   /** Every agent the host can run. A run that resumes after a restart finds its agent here, by name. */
   agents: readonly AnyAgent[];
+  /**
+   * The host's value of each resource the agents' tools use, per run: `provide(resource, (run) => value)`. A provider
+   * resolves from the run as it was started, so a run that resumes after a restart gets the same one.
+   */
+  resources?: readonly Provider[];
   /**
    * Record message content in the trace: instructions, tool definitions, messages, tool arguments and results. Off by
    * default, as the GenAI conventions say: content can hold sensitive data.
@@ -92,8 +98,17 @@ export async function openRuntime({
   storage,
   models,
   agents,
+  resources: providers = [],
   captureContent = false,
 }: RuntimeOptions): Promise<Runtime> {
+  const resources = createResources(providers);
+  resources.check(
+    agents.flatMap((agent) =>
+      agent.tools.flatMap((tool) =>
+        (tool.uses ?? []).map((resource) => ({ tool: tool.name, resource })),
+      ),
+    ),
+  );
   const installed = new Map<
     string,
     { agent: AnyAgent; extension: Extension }
@@ -101,7 +116,10 @@ export async function openRuntime({
   for (const agent of agents) {
     if (installed.has(agent.name))
       throw new Error(`two agents are named "${agent.name}"`);
-    installed.set(agent.name, { agent, extension: agentExtension(agent) });
+    installed.set(agent.name, {
+      agent,
+      extension: agentExtension(agent, resources),
+    });
   }
   const tracing = createTracing({
     agents: new Map([...installed].map(([name, { agent }]) => [name, agent])),
@@ -213,6 +231,7 @@ export async function openRuntime({
         },
       );
       onMessages?.(await transcript());
+      resources.forget(runId);
     }
   }
 
@@ -221,6 +240,7 @@ export async function openRuntime({
     async close() {
       await tracing.closeAll();
       await harness.close(context);
+      resources.clear();
     },
   };
 }
