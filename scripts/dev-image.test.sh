@@ -2,7 +2,8 @@
 # shellcheck disable=SC2329 # A function here is called by name: a case by the loop at the end, the rest by a case.
 # shellcheck disable=SC2312 # An assertion reads a command's output; its exit is the assertion's, not the command's.
 # shellcheck disable=SC2016 # The workflow cases hold GitHub's expressions as text: a pattern is literal.
-# The tests of scripts/dev-image.sh, on one machine, with no image, no registry and no network. Each
+# The tests of scripts/dev-image.sh and of the workflows that call it, on one machine, with no image, no
+# registry and no network. Each script case
 # case makes a temp git repo that holds the three inputs and a copy of the script, and puts stand-in
 # `skopeo` and `podman` first on PATH. Each stand-in appends its arguments as one line to $T/calls.
 # The registry is $T/registry, one `<tag> <digest>` per line: `skopeo inspect` answers a tag listed
@@ -408,6 +409,12 @@ block_in() {
 list_under() { wf_lines | list_in "$1"; }
 # block <key regex>: the workflow's lines indented under the first matching line.
 block() { wf_lines | block_in "$1"; }
+# job <name>: the workflow's lines under the job with that name: its own line, and each line indented under it.
+job() {
+  wf_lines | awk -v j="  $1:" '
+    found { if ($0 ~ /^  [^ ]/) exit; print; next }
+    $0 == j { found = 1; print }'
+}
 # present: whether the workflow file the case reads is there, as an assertion's value.
 present() { [ -f "$wf" ] && echo present || echo missing; }
 
@@ -466,6 +473,108 @@ test_each_action_is_pinned() {
   bad=$(grep -vE 'uses: [^@ ]+@[0-9a-f]{40}( |$)' <<<"$uses" || true)
   then_is "the unpinned uses" "" "$bad" &&
     { [ -n "$uses" ] || miss "the workflow: expected it to use an action, got none"; } &&
+    pass
+}
+
+# --- checks.yml: the check runs in the dev image ---
+
+# the lines of the checks job's gate step: its env, and its run block.
+gate_step() { job checks | block_in '^      - env:'; }
+# gate_script: the gate's run block as the shell it is, one command per line, no indentation.
+gate_script() { gate_step | sed -n '/^ *run: |/,$p' | tail -n +2 | sed 's/^ *//'; }
+# gate_exit <image result> <check result>: the gate's exit when the two jobs ended so.
+gate_exit() {
+  IMAGE=$1 CHECK=$2 sh -ec "$(gate_script)" >/dev/null 2>&1
+  echo $?
+}
+
+test_the_image_job_resolves_the_dev_image() {
+  name="the image job reads its token, logs in with it, and writes dev-image.sh ref's output as its image"
+  given_workflow checks.yml || fail "setup: the case's folder"
+  then_is "the workflow file" "present" "$(present)" || return 1
+  image=$(job image)
+  steps=$(block_in '^    steps:' <<<"$image")
+  login=$(grep -F 'skopeo login ghcr.io' <<<"$steps" || true)
+  ref=$(grep -F 'scripts/dev-image.sh ref' <<<"$steps" || true)
+  login_at=$(grep -nF 'skopeo login ghcr.io' <<<"$steps" | cut -d: -f1)
+  ref_at=$(grep -nF 'id: image' <<<"$steps" | cut -d: -f1)
+  then_is "the image job's permissions" "$(printf '%s\n' 'contents: read' 'packages: read')" \
+    "$(block_in '^    permissions:' <<<"$image" | sed 's/^ *//' | sort)" &&
+    then_has "the login step's env" 'TOKEN: ${{ secrets.GITHUB_TOKEN }}' "$steps" &&
+    then_has "the login" '| skopeo login ghcr.io --username "${{ github.actor }}" --password-stdin' "$login" &&
+    then_lacks "the login" '--password ' "$login" &&
+    { [ -n "$login_at" ] && [ -n "$ref_at" ] && [ "$login_at" -lt "$ref_at" ] ||
+      miss "the steps: expected the login before the id: image step; got lines [$login_at] [$ref_at]"; } &&
+    then_has "the ref step" 'image=$(' "$ref" &&
+    then_has "the ref step" 'GITHUB_OUTPUT' "$ref" &&
+    then_is "the image job's output" 'image: ${{ steps.image.outputs.image }}' \
+      "$(block_in '^    outputs:' <<<"$image" | sed 's/^ *//')" &&
+    pass
+}
+
+test_the_check_job_runs_in_that_image() {
+  name="the check job needs the image job, runs in its image with its token, prints it, then runs check.sh"
+  given_workflow checks.yml || fail "setup: the case's folder"
+  then_is "the workflow file" "present" "$(present)" || return 1
+  check_job=$(job check)
+  needs=$(grep -E '^    needs:' <<<"$check_job" || true)
+  container=$(block_in '^    container:' <<<"$check_job")
+  steps=$(block_in '^    steps:' <<<"$check_job")
+  first=$(head -1 <<<"$steps")
+  echo_at=$(grep -nF 'dev image:' <<<"$steps" | cut -d: -f1)
+  check_at=$(grep -nF 'scripts/check.sh' <<<"$steps" | cut -d: -f1)
+  then_has "the check job's needs" 'image' "$needs" &&
+    then_is "the check job's permissions" "$(printf '%s\n' 'contents: read' 'packages: read')" \
+      "$(block_in '^    permissions:' <<<"$check_job" | sed 's/^ *//' | sort)" &&
+    then_has "the container's image" 'image: ${{ needs.image.outputs.image }}' "$container" &&
+    then_has "the container's credentials" 'username: ${{ github.actor }}' "$container" &&
+    then_has "the container's credentials" 'password: ${{ secrets.GITHUB_TOKEN }}' "$container" &&
+    then_has "the first step" 'echo "dev image: ${{ needs.image.outputs.image }}"' "$first" &&
+    { [ -n "$echo_at" ] && [ -n "$check_at" ] && [ "$echo_at" -lt "$check_at" ] ||
+      miss "the steps: expected the image echo, then scripts/check.sh; got lines [$echo_at] [$check_at]"; } &&
+    pass
+}
+
+# A job container runs as root: root reads every file, so a check that needs a file it may not open cannot fail as
+# it should, and git refuses a checkout root does not own. The check runs as the image's node, as in the dev
+# container, over a checkout node owns.
+test_the_check_runs_as_node_over_a_checkout_node_owns() {
+  name="the check job hands the checkout to node and runs check.sh as node, with node's home"
+  given_workflow checks.yml || fail "setup: the case's folder"
+  then_is "the workflow file" "present" "$(present)" || return 1
+  steps=$(job check | block_in '^    steps:')
+  then_has "the check step" 'run: chown -R node:node "$GITHUB_WORKSPACE" && runuser -u node -- env HOME=/home/node scripts/check.sh' "$steps" &&
+    then_lacks "the steps" 'run: scripts/check.sh' "$steps" &&
+    pass
+}
+
+test_no_toolchain_is_set_up() {
+  name="no line of checks.yml names actions/setup-node or node's cache; the image holds them"
+  given_workflow checks.yml || fail "setup: the case's folder"
+  then_is "the workflow file" "present" "$(present)" &&
+    then_has "the workflow" 'uses: actions/checkout@' "$(wf_lines)" &&
+    then_lacks "the workflow" 'actions/setup-node' "$(wf_lines)" &&
+    then_lacks "the workflow" 'node-version' "$(wf_lines)" &&
+    then_lacks "the workflow" 'cache: npm' "$(wf_lines)" &&
+    pass
+}
+
+test_the_required_job_cannot_pass_on_a_skip() {
+  name="checks always runs, needs both jobs, and exits non-zero unless both results are success"
+  given_workflow checks.yml || fail "setup: the case's folder"
+  then_is "the workflow file" "present" "$(present)" || return 1
+  checks_job=$(job checks)
+  needs=$(grep -E '^    needs:' <<<"$checks_job" || true)
+  gate=$(gate_step)
+  then_has "the checks job" 'if: always()' "$checks_job" &&
+    then_has "the checks job's needs" 'image' "$needs" &&
+    then_has "the checks job's needs" 'check' "$needs" &&
+    then_has "the gate's env" 'IMAGE: ${{ needs.image.result }}' "$gate" &&
+    then_has "the gate's env" 'CHECK: ${{ needs.check.result }}' "$gate" &&
+    then_is "the gate on success and success" 0 "$(gate_exit success success)" &&
+    { [ "$(gate_exit failure success)" -ne 0 ] || miss "the gate: expected non-zero when the image job failed, got 0"; } &&
+    { [ "$(gate_exit success failure)" -ne 0 ] || miss "the gate: expected non-zero when the check job failed, got 0"; } &&
+    { [ "$(gate_exit failure failure)" -ne 0 ] || miss "the gate: expected non-zero when both failed, got 0"; } &&
     pass
 }
 
