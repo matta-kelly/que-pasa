@@ -7,7 +7,8 @@
  *
  *   node crash.fixture.ts <scenario> <first|second> <sqlite file> <log file> <spans file>
  */
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import {
   createModels,
   fauxAssistantMessage,
@@ -31,10 +32,17 @@ import {
   defineTool,
   type Runtime,
 } from "../define/index.ts";
+import { memory } from "../middleware/index.ts";
+import { local } from "../sandbox/index.ts";
 import { openRuntime, provide } from "./index.ts";
 
 type Scenario =
-  "model" | "unsafe-tool" | "safe-tool" | "resource" | "after-submit";
+  | "model"
+  | "unsafe-tool"
+  | "safe-tool"
+  | "resource"
+  | "memory"
+  | "after-submit";
 const [scenario, phase, file, log, spans] = process.argv.slice(2) as [
   Scenario,
   "first" | "second",
@@ -98,7 +106,9 @@ const step = defineTool({
   description: "Do the step.",
   schema: z.object({}),
   uses: [tag],
-  ...(scenario === "safe-tool" || scenario === "resource"
+  ...(scenario === "safe-tool" ||
+  scenario === "resource" ||
+  scenario === "memory"
     ? { replay: "safe" as const }
     : {}),
   run: async (_input, runtime: Runtime<{ tag: string }>) => {
@@ -108,19 +118,52 @@ const step = defineTool({
     return phase === "first" ? crashPoint() : "stepped";
   },
 });
+/**
+ * In the memory scenario, the agent's memory file, beside the log: each phase writes its own text first, so the second
+ * phase's file has changed since the run started.
+ */
+const folder = dirname(log);
+if (scenario === "memory")
+  writeFileSync(`${folder}/memory.md`, `memory of the ${phase} phase\n`);
 const agent = defineAgent({
   name: "worker",
   model: `${model.provider}:${model.id}`,
   instructions: "Do the step, then submit.",
   tools: [step],
   output: z.object({ verdict: z.enum(["done", "raise"]), note: z.string() }),
+  ...(scenario === "memory"
+    ? {
+        middleware: [
+          memory({ backend: local({ root: folder }), sources: ["memory.md"] }),
+        ],
+      }
+    : {}),
 });
+
+/** The system prompt of each model request of this process, as its sections' text. */
+const prompts: string[] = [];
+const seeing =
+  (reply: ReturnType<typeof fauxAssistantMessage>) =>
+  (request: { messages: Message[] }) => {
+    prompts.push(
+      request.messages
+        .flatMap((m) =>
+          m.role === "system"
+            ? Object.values(
+                (m as { sections?: Record<string, string> }).sections ?? {},
+              )
+            : [],
+        )
+        .join("\n"),
+    );
+    return reply;
+  };
 
 faux.setResponses(
   phase === "second"
     ? scenario === "after-submit"
       ? []
-      : [submit]
+      : [seeing(submit)]
     : {
         model: [
           fauxAssistantMessage([
@@ -138,6 +181,11 @@ faux.setResponses(
           }),
         ],
         resource: [
+          fauxAssistantMessage([fauxToolCall("step", {})], {
+            stopReason: "toolUse",
+          }),
+        ],
+        memory: [
           fauxAssistantMessage([fauxToolCall("step", {})], {
             stopReason: "toolUse",
           }),
@@ -191,7 +239,7 @@ if (phase === "first") {
     .split("\n")
     .filter(Boolean);
   console.log(
-    `RESULT ${JSON.stringify({ value, calls: faux.state.callCount, ran, messages: brief })}`,
+    `RESULT ${JSON.stringify({ value, calls: faux.state.callCount, ran, messages: brief, prompts })}`,
   );
   await runtime.close();
 }

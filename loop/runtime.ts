@@ -23,7 +23,7 @@ import {
 } from "../define/index.ts";
 import { type AnyAgent, agentExtension, submitTool } from "./extension.ts";
 import { createResources, type Provider } from "./resources.ts";
-import { RunDoc, RunIndex, type RunState } from "./state.ts";
+import { MiddlewareDoc, RunDoc, RunIndex, type RunState } from "./state.ts";
 import { activeParent, createTracing } from "./trace.ts";
 import { answerOf, messagesOf, resultOf } from "./transcript.ts";
 
@@ -133,8 +133,8 @@ export async function openRuntime({
   harness.resume();
 
   /**
-   * The run's conversation: made with its agent, its model and its run document in one commit, or the one this run id
-   * already has, which keeps what it was started with.
+   * The run's conversation: made with its agent, its model, its run document and its middleware's state in one commit,
+   * or the one this run id already has, which keeps what it was started with.
    */
   async function conversationOf(
     agent: AnyAgent,
@@ -142,6 +142,10 @@ export async function openRuntime({
     start: RunState,
   ) {
     const { runId } = start;
+    const made = await harness.snapshot(RunIndex, runId, context);
+    // Each middleware's beforeAgent runs once, for a run not made yet, outside the commit that keeps what it gave back.
+    const states =
+      made?.conversationId != null ? [] : await beforeAgent(agent, start);
     const id = await harness.commit(async (tx) => {
       const index = await tx.doc(RunIndex, runId, null);
       if (index.conversationId !== null) {
@@ -162,6 +166,9 @@ export async function openRuntime({
         extensions: [extension, tracing.extension],
       });
       Object.assign(await tx.doc(RunDoc, id), start);
+      for (const { name, state } of states) {
+        (await tx.doc(MiddlewareDoc, id, name, state)).state = state;
+      }
       index.conversationId = id;
       tracing.start(id);
       return id;
@@ -262,4 +269,23 @@ async function waitFor(
     await conversation.abort(context);
     throw signal.reason;
   }
+}
+
+/** What each of the agent's middleware with a `beforeAgent` gives back for a run, from the run as it is started. */
+async function beforeAgent(agent: AnyAgent, start: RunState) {
+  const { runId, caller, context: given } = start;
+  const run = {
+    runId,
+    caller,
+    ...(given === undefined ? {} : { context: given }),
+  };
+  const states: { name: string; state: Json }[] = [];
+  for (const middleware of agent.middleware ?? []) {
+    if (!middleware.beforeAgent) continue;
+    states.push({
+      name: middleware.name,
+      state: await middleware.beforeAgent(run),
+    });
+  }
+  return states;
 }

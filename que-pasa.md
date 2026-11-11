@@ -31,11 +31,14 @@ What is written in a workspace's own repo, with que-pasa's `define`: its agents,
     ├── tools/
     │   └── <service>/          the tools that read one connection
     │       └── <tool>.ts
+    ├── memory/
+    │   └── <file>.md           context the model always reads
     ├── skills/
     │   └── <skill>/SKILL.md
     ├── tests/                  eval cases, beside the capability they check
     ├── agents/
-    │   └── <agent>.ts          picks its tools and skills from this workspace
+    │   ├── <agent>.ts          picks its tools, memory and skills from this workspace
+    │   └── <agent>.md          its instructions
     └── teams.ts                each team: its members, and the agents it is given
 ```
 
@@ -43,10 +46,11 @@ What is written in a workspace's own repo, with que-pasa's `define`: its agents,
 	- its core: a name (kebab-case), a model (`provider:model-id`), instructions, the tools it may call and no others, and the shape of its result. With none, it answers in text
 	- it acts as the caller, with each person's own login, or as itself, with its own. Not built: today every tool gets the caller, and connections are not resolved
 	- context scope and lifecycle are settings, not kinds of agent: a chat agent keeps one conversation, a worker one task, an ephemeral one one call. Not built: today a run is one input
-	- middleware: optional behaviours on its loop, each separate: approval, summarize, call limits, loading. LangChain's shape. Not built
+	- middleware ([[que-pasa-middleware]]): optional behaviours on its loop, each separate, in LangChain's shape. Built: the primitive, with the hooks memory needs, and memory. Approval, summarize and call limits are not built
 - what an agent is built from
 	- tools (`defineTool`): [[define-tool]]. A function an agent can call, written once, so any agent in the workspace can be given it. It gets what it acts on from its run as a resource, a sandbox or a login, and never holds it
 		- ready-made: the file and command tools of [[que-pasa-sandbox]], which act in the sandbox the host gives each run
+	- memory: files the model always reads, loaded once when a run is made and kept in it, picked by `memory({ backend, sources })` in the agent's middleware, after Deep Agents' `MemoryMiddleware`. A file of `memory/` can serve any agent; the role's note links what its agent loads. Read only: the agent does not edit it
 	- skills: packaged know-how for one kind of task, a folder with `SKILL.md` (the Agent Skills format). The agent sees each skill's name and description at start, and reads the rest when a task matches. Not built
 	- connections: a resource that links to one outside service, whose login the workspace names. Not built
 		- owned by a user: each person authorizes their own account once, and the run that first needs it pauses and asks
@@ -60,7 +64,7 @@ What is written in a workspace's own repo, with que-pasa's `define`: its agents,
 - a run carries its caller: tools read it from the run, and no tool or agent passes the user along. The caller can be a person, or a program: a service, or the agent itself
 - a person, a schedule, an event or code starts a run. Today `run()` waits for the run's end; a run started and left to go on, to be picked up later by its run id, for a schedule or an event, is not built
 - a run's life: it starts from an input, moves through model and tool calls, and ends with an answer or a submit. Continuing with a new input is not built
-- what keeps it right: durability, so a finished step is never done twice; middleware (approval, limits) is not built
+- what keeps it right: durability, so a finished step is never done twice; middleware, whose state a run keeps, so a run that resumes has what it started with. Approval and limits are not built
 - what it leaves: its result, usage, conversation, and its trace, which is what evals read
 
 ## Host
@@ -77,7 +81,7 @@ How a workspace's agents are reached: a process that runs them.
 ## Seams
 
 What crosses between que-pasa and the outside.
-- a workspace's repo, and a host, import `@mku1tra/que-pasa/define`, `/loop` and `/sandbox`, by its published version on npm. zod is a peer
+- a workspace's repo, and a host, import `@mku1tra/que-pasa/define`, `/loop`, `/middleware` and `/sandbox`, by its published version on npm. zod is a peer
 - a host gives storage, models, agents and resources, and gets results, usage and conversations
 - a sandbox ([[que-pasa-sandbox]]): que-pasa ships the backends, the view and the tools; the host gives each run its backend, and sets the policy: image, mounts, network, read-only, view
 - spans go out through `@opentelemetry/api` only. The host owns the SDK and where spans go; it records what only it knows on its own span and calls `run()` inside it. Every segment of a run, also after a crash, is in that trace

@@ -36,6 +36,10 @@ describe("a view", () => {
     expect(await bound.grep("const", "src/c.ts")).toEqual({
       error: "file_not_found",
     });
+    expect(await bound.download(["src/c.ts", "README"])).toEqual([
+      { path: "src/c.ts", error: "file_not_found" },
+      { path: "README", content: new TextEncoder().encode("const r = 0;\n") },
+    ]);
   });
 
   it("lists only its files, and the folders on the way to them", async () => {

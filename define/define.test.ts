@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { defineAgent, defineResource, defineTool } from "./index.ts";
+import {
+  defineAgent,
+  defineMiddleware,
+  defineResource,
+  defineTool,
+} from "./index.ts";
 
 const caller = { id: "matt" };
 const odoo = defineResource<{ login: string }>("odoo");
@@ -121,4 +126,39 @@ describe("defineAgent", () => {
     expect(Object.isFrozen(agent)).toBe(true);
     expect(Object.isFrozen(agent.tools)).toBe(true);
   });
+
+  it("keeps its middleware in order, fixed once defined", () => {
+    const first = defineMiddleware({ name: "first" });
+    const second = defineMiddleware({ name: "second" });
+    const agent = defineAgent({ ...salesRep, middleware: [first, second] });
+    expect(agent.middleware).toEqual([first, second]);
+    expect(Object.isFrozen(agent.middleware)).toBe(true);
+  });
+
+  it("refuses two middleware of one name", () => {
+    const memory = defineMiddleware({ name: "memory" });
+    expect(() =>
+      defineAgent({ ...salesRep, middleware: [memory, memory] }),
+    ).toThrow('two middleware are named "memory"');
+  });
+});
+
+describe("defineMiddleware", () => {
+  it("gives back the middleware, fixed, with its hooks", () => {
+    const middleware = defineMiddleware<{ n: number }>({
+      name: "count",
+      beforeAgent: () => ({ n: 1 }),
+      systemPrompt: (state) => `n is ${state?.n ?? 0}`,
+    });
+    expect(Object.isFrozen(middleware)).toBe(true);
+    expect(middleware.systemPrompt!({ n: 2 })).toBe("n is 2");
+    expect(middleware.systemPrompt!(null)).toBe("n is 0");
+  });
+
+  it.each(["Memory", "the_memory", "1memory", ""])(
+    "refuses the name %j",
+    (name) => {
+      expect(() => defineMiddleware({ name })).toThrow("kebab-case");
+    },
+  );
 });

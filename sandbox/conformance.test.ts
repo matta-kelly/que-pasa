@@ -31,6 +31,9 @@ const seed: Record<string, string> = {
   ".git/config": "const hidden = 0;\n",
 };
 const written = ["src/new.ts", "deep/er/new.ts", "src/$(touch pwned)"];
+/** A file of every byte, which no text encoding keeps: a download must give it back as it is. Made by its case. */
+const binary = "bin/all.bin";
+const bytes = Uint8Array.from({ length: 256 }, (_, i) => i);
 
 /** A fresh host folder with the seed files. */
 function folder() {
@@ -60,7 +63,7 @@ const backends: [string, () => Made, boolean][] = [
     () => {
       const host = folder();
       const backend = view(local({ root: host }), {
-        read: Object.keys(seed),
+        read: [...Object.keys(seed), binary],
         write: [...Object.keys(seed), ...written],
       });
       return { backend, root: host, host };
@@ -209,6 +212,18 @@ describe.each(backends)("the %s backend", (name, make, runs) => {
       expect(await b().grep("x", "nope")).toEqual({ error: "file_not_found" });
     });
 
+    it("downloads files whole, as bytes, in order, each with its own error", async () => {
+      mkdirSync(join(made.host, "bin"));
+      writeFileSync(join(made.host, binary), bytes);
+      const got = await b().download([binary, "README", "nope", "src"]);
+      expect(got.map((r) => r.path)).toEqual([binary, "README", "nope", "src"]);
+      expect(got[0]!.content).toEqual(bytes);
+      expect(new TextDecoder().decode(got[1]!.content)).toBe(seed["README"]);
+      expect(got[2]).toEqual({ path: "nope", error: "file_not_found" });
+      expect(got[3]).toEqual({ path: "src", error: "is_directory" });
+      expect(await b().download([])).toEqual([]);
+    });
+
     it.each([
       "..",
       "../x",
@@ -226,6 +241,7 @@ describe.each(backends)("the %s backend", (name, make, runs) => {
       expect(await b().edit(bad, "a", "b", false)).toEqual(refused);
       expect(await b().glob("*", bad)).toEqual(refused);
       expect(await b().grep("x", bad)).toEqual(refused);
+      expect(await b().download([bad])).toEqual([{ path: bad, ...refused }]);
     });
 
     it("refuses an absolute path beside the root that starts with its name", async () => {

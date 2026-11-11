@@ -58,6 +58,20 @@ export function view(backend: FileBackend, paths: ViewPaths): FileBackend {
       if (p === undefined) return invalid;
       return sees(p) ? backend.read(path, offset, limit) : missing;
     },
+    async download(paths) {
+      // One backend call for the paths the view sees; each other path answers as read does.
+      const seen = paths.filter((path) => {
+        const p = at(path);
+        return p !== undefined && sees(p);
+      });
+      const got = seen.length > 0 ? await backend.download(seen) : [];
+      return paths.map((path) => {
+        const p = at(path);
+        if (p === undefined) return { path, ...invalid };
+        if (!sees(p)) return { path, ...missing };
+        return got[seen.indexOf(path)]!;
+      });
+    },
     async write(path, content) {
       const p = at(path);
       if (p === undefined) return invalid;

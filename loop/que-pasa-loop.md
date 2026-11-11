@@ -34,7 +34,7 @@ while True:
 ```
 
 - durable execution: a log kept so that a run goes on from where it stopped. Approval gates and idempotency are not two items but this one pillar: an approval gate is durability holding state while a person decides, and idempotency is what durability needs to replay safely
-- in que-pasa the log is pi-durable's conversation, kept in the host's storage. `build` is the agent's instructions and tools; `run` is its tools, the resources the host gives them, and, not built, middleware
+- in que-pasa the log is pi-durable's conversation, kept in the host's storage. `build` is the agent's instructions, its tools, and what its middleware adds to the system prompt; `run` is its tools and the resources the host gives them
 
 ## States
 
@@ -42,14 +42,14 @@ A run moves from admitted to settled, through model calls and tool calls; pi mov
 
 | State | Holds | Moves on when | Moved by |
 |---|---|---|---|
-| admitted | its conversation and run document, made in one commit; its input, in with the run id as `requestId` | pi takes the input | `runtime.run` |
+| admitted | its conversation, run document and middleware state, made in one commit; its input, in with the run id as `requestId` | pi takes the input | `runtime.run` |
 | generating | a model request | the model answers: with tool calls to tooling, without to settled, or reminded to generating | pi's generation task |
 | tooling | the round's tool calls | each has a result: to generating, or to settled when every result ends the run (the submit) | pi's tool tasks |
 | settled | its answer or its failure; the run's result is read from the transcript | (terminal) | pi; `runtime.run` reads it |
 
 - settled, as: answered (text), submitted (the output), or failed: `no_submit` after two reminders, or pi's reason (`aborted`, `model_error`, `restart_limit` and the others)
 - continued by a new input, from settled back to generating, for chat and for evals with a simulated user: not built
-- middleware between generating and tooling (approval, summarize, limits): not built
+- middleware ([[que-pasa-middleware]]): `beforeAgent` runs once before the run is admitted, and `systemPrompt` before each request in generating. Middleware between generating and tooling (approval, summarize, limits): not built
 
 ## Invariants
 
@@ -61,6 +61,7 @@ What holds in every state of every run. Each is held by construction, and checke
 | no run state in memory: a new process can go on with any run | the caller, context and model in the run document; the result and the reminders in the transcript | `crash.test.ts`: every crash point, in a new process |
 | a finished step is never done twice | pi's checkpoint per step; a tool not marked `replay: "safe"` never runs again | `crash.test.ts`: mid tool, mid model request, after the submit |
 | a run keeps what it was started with: input, caller, model, context | the run document, written once, in the commit that makes the run | `runtime.test.ts`: a run started again with another model |
+| a run keeps the middleware state it started with: its system prompt is the same in every process | each `beforeAgent` result kept in a `MiddlewareDoc`, in the commit that makes the run; a section renders from it, never from memory | `crash.test.ts`: the memory file changed, and the resumed process's model gets the text the run started with |
 | a run's tools get the same resources in every process | a provider resolves from the run document, never from memory; once per run in a process | `crash.test.ts`: the resumed process resolves from the stored context |
 | the result is the last submit that passed the schema | the submit tool parses with zod before it keeps the result; a failed parse goes back to the model | `runtime.test.ts`: a bad submit, then a good one |
 | every segment of a run is in one trace | the run document keeps the span the run started in, or its first segment | `crash.test.ts`: the resumed segment under the host's span |

@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { Middleware } from "./middleware.ts";
 import type { Json } from "./runtime.ts";
 import type { Tool } from "./tool.ts";
 
@@ -17,6 +18,8 @@ export type Agent<
   tools: readonly Tool<z.ZodObject, C>[];
   /** The shape of its result. Left out, the agent answers in chat text. */
   output?: O;
+  /** Optional behaviours on its loop, in order: such as `memory`. */
+  middleware?: readonly Middleware[];
 };
 
 const agentName = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
@@ -33,7 +36,7 @@ export function parseModel(model: string): {
   return { provider: model.slice(0, at), modelId: model.slice(at + 1) };
 }
 
-/** An agent, checked: its name, its model id, its instructions, and tool names that do not repeat. */
+/** An agent, checked: its name, its model id, its instructions, and tool and middleware names that do not repeat. */
 export function defineAgent<
   O extends z.ZodObject | undefined = undefined,
   C extends Json | undefined = undefined,
@@ -58,5 +61,20 @@ export function defineAgent<
     }
     seen.add(tool.name);
   }
-  return Object.freeze({ ...agent, tools: Object.freeze([...agent.tools]) });
+  const named = new Set<string>();
+  for (const middleware of agent.middleware ?? []) {
+    if (named.has(middleware.name)) {
+      throw new Error(
+        `agent "${agent.name}": two middleware are named "${middleware.name}"`,
+      );
+    }
+    named.add(middleware.name);
+  }
+  return Object.freeze({
+    ...agent,
+    tools: Object.freeze([...agent.tools]),
+    ...(agent.middleware
+      ? { middleware: Object.freeze([...agent.middleware]) }
+      : {}),
+  });
 }

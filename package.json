@@ -21,6 +21,10 @@
       "types": "./dist/loop/index.d.ts",
       "default": "./dist/loop/index.js"
     },
+    "./middleware": {
+      "types": "./dist/middleware/index.d.ts",
+      "default": "./dist/middleware/index.js"
+    },
     "./sandbox": {
       "types": "./dist/sandbox/index.d.ts",
       "default": "./dist/sandbox/index.js"

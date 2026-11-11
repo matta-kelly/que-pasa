@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
   defineAgent,
+  defineMiddleware,
   defineResource,
   defineTool,
   type Runtime,
@@ -957,5 +958,122 @@ describe("a run's resources", () => {
     const results = messages.filter((m) => m.role === "toolResult");
     expect(results.map((m) => m.isError)).toEqual([true, false]);
     expect(calls).toBe(2);
+  });
+});
+
+describe("a run's middleware", () => {
+  /** A scripted model that answers each call, and keeps the system prompt it was given. */
+  function seeing() {
+    const { faux, models, model } = scripted();
+    const prompts: string[] = [];
+    // The system prompt, as the model gets it: each system message's sections, in the order pi renders them.
+    const answer = (text: string) => (context: { messages: Message[] }) => {
+      prompts.push(
+        context.messages
+          .flatMap((m) =>
+            m.role === "system"
+              ? Object.values(
+                  (m as { sections?: Record<string, string> }).sections ?? {},
+                )
+              : [],
+          )
+          .join("\n"),
+      );
+      return fauxAssistantMessage([fauxText(text)]);
+    };
+    return { faux, models, model, prompts, answer };
+  }
+
+  it("adds its section to the system prompt the model gets, from the state its run kept, before the instructions", async () => {
+    const { faux, models, model, prompts, answer } = seeing();
+    faux.setResponses([answer("Done.")]);
+    const notes = defineMiddleware<{ note: string }>({
+      name: "notes",
+      beforeAgent: ({ caller }) => ({ note: `notes for ${caller.id}` }),
+      systemPrompt: (state) => state?.note,
+    });
+    const agent = defineAgent({
+      name: "noted",
+      model,
+      instructions: "Answer from your notes.",
+      tools: [],
+      middleware: [notes],
+    });
+    await once(agent, "Go.", { caller, models });
+    expect(prompts).toHaveLength(1);
+    const prompt = prompts[0]!;
+    expect(prompt).toContain("notes for matt");
+    expect(prompt.indexOf("notes for matt")).toBeLessThan(
+      prompt.indexOf("Answer from your notes."),
+    );
+  });
+
+  it("runs beforeAgent once per run: a run started again keeps what it gave", async () => {
+    const { faux, models, model, prompts, answer } = seeing();
+    faux.setResponses([answer("One.")]);
+    let calls = 0;
+    const counted = defineMiddleware<{ call: number }>({
+      name: "counted",
+      beforeAgent: () => ({ call: (calls += 1) }),
+      systemPrompt: (state) => `call ${state?.call}`,
+    });
+    const agent = defineAgent({
+      name: "counting",
+      model,
+      instructions: "Answer.",
+      tools: [],
+      middleware: [counted],
+    });
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [agent],
+    });
+    try {
+      await runtime.run(agent, "Go.", { runId: "run-1", caller });
+      await runtime.run(agent, "Go.", { runId: "run-1", caller });
+    } finally {
+      await runtime.close();
+    }
+    expect(calls).toBe(1);
+    expect(prompts).toEqual([expect.stringContaining("call 1")]);
+  });
+
+  it("fails a run whose beforeAgent throws, keeping nothing: the run started again starts fresh", async () => {
+    const { faux, models, model, prompts, answer } = seeing();
+    faux.setResponses([answer("Done.")]);
+    let fail = true;
+    const flaky = defineMiddleware<string>({
+      name: "flaky",
+      beforeAgent: () => {
+        if (fail) throw new Error("the source is not there yet");
+        return "loaded";
+      },
+      systemPrompt: (state) => state ?? undefined,
+    });
+    const agent = defineAgent({
+      name: "flaky-agent",
+      model,
+      instructions: "Answer.",
+      tools: [],
+      middleware: [flaky],
+    });
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [agent],
+    });
+    try {
+      await expect(
+        runtime.run(agent, "Go.", { runId: "run-1", caller }),
+      ).rejects.toThrow("the source is not there yet");
+      fail = false;
+      await expect(
+        runtime.run(agent, "Go.", { runId: "run-1", caller }),
+      ).resolves.toBe("Done.");
+    } finally {
+      await runtime.close();
+    }
+    expect(prompts).toEqual([expect.stringContaining("loaded")]);
   });
 });

@@ -1,13 +1,7 @@
-import type { Caller, Json, Resource } from "../define/index.ts";
+import type { Resource, RunOf } from "../define/index.ts";
 import type { RunState } from "./state.ts";
 
-/** What a provider resolves a resource from: the run as it was started, read from its run document. */
-export type RunOf = {
-  runId: string;
-  caller: Caller;
-  /** Absent when the run was given none. */
-  context?: Json;
-};
+export type { RunOf };
 
 /** The host's value of one resource, per run. */
 export type Provider<T = unknown> = {

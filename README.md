@@ -43,6 +43,20 @@ const runtime = await openRuntime({
 
 A provider resolves from the run as it was started, so a run that resumes after a crash gets the same sandbox. `view(backend, { read, write })` limits a run to some files. What each backend's wall stops: `sandbox/que-pasa-sandbox.md`.
 
+An agent's middleware are optional behaviours on its loop. `memory` gives an agent files it always has in its context, loaded once when the run is made and kept in it, so a run that resumes has the memory it started with:
+
+```ts
+import { memory } from "@mku1tra/que-pasa/middleware";
+import { local } from "@mku1tra/que-pasa/sandbox";
+
+const reviewer = defineAgent({
+  name: "reviewer", model, instructions, tools,
+  middleware: [memory({ backend: local({ root: workspace }), sources: ["memory/craft.md"] })],
+});
+```
+
+What middleware is, and how memory works: `middleware/que-pasa-middleware.md`.
+
 Each run is traced as OpenTelemetry GenAI spans through `@opentelemetry/api`. To keep them, register an SDK (a tracer provider, an exporter, and an async context manager). To add what only the host knows, call `runtime.run()` inside a span of its own. `captureContent: true` on `openRuntime` adds message content.
 
 ## Use it from another project

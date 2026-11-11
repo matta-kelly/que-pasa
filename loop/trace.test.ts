@@ -14,7 +14,12 @@ import {
 } from "@opentelemetry/sdk-trace";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { defineAgent, defineTool } from "../define/index.ts";
+import {
+  defineAgent,
+  defineMiddleware,
+  defineTool,
+  type Middleware,
+} from "../define/index.ts";
 import { openRuntime } from "./index.ts";
 import { scripted } from "./scripted.fixture.ts";
 import { versionOf } from "./trace.ts";
@@ -52,7 +57,13 @@ async function traced(
     output,
     captureContent = false,
     host = false,
-  }: { output?: typeof verdict; captureContent?: boolean; host?: boolean } = {},
+    middleware,
+  }: {
+    output?: typeof verdict;
+    captureContent?: boolean;
+    host?: boolean;
+    middleware?: readonly Middleware[];
+  } = {},
 ) {
   exporter.reset();
   const { faux, models, model } = scripted();
@@ -63,6 +74,7 @@ async function traced(
     instructions: "Read stock.",
     tools: [stock],
     ...(output ? { output } : {}),
+    ...(middleware ? { middleware } : {}),
   });
   const runtime = await openRuntime({
     storage: new MemoryStorage(),
@@ -197,6 +209,27 @@ describe("a run's trace", () => {
     );
   });
 
+  it("records the system prompt as the model gets it: each middleware's section from its run, then the instructions", async () => {
+    const notes = defineMiddleware<string>({
+      name: "notes",
+      beforeAgent: () => "Stock is counted daily.",
+      systemPrompt: (state) => state ?? undefined,
+    });
+    const on = (
+      await traced(toolRun, { captureContent: true, middleware: [notes] })
+    ).spans;
+    expect(
+      JSON.parse(
+        String(
+          only(on, "invoke_agent").attributes["gen_ai.system_instructions"],
+        ),
+      ),
+    ).toEqual([
+      { type: "text", content: "Stock is counted daily." },
+      { type: "text", content: "Read stock." },
+    ]);
+  });
+
   it("marks a tool call that failed with its error type", async () => {
     const { faux, models, model } = scripted();
     const broken = defineTool({
@@ -275,5 +308,13 @@ describe("a run's trace", () => {
     expect(versionOf(agent, model)).toBe(versionOf(same, model));
     expect(versionOf(agent, model)).not.toBe(versionOf(changed, model));
     expect(versionOf(agent, model)).not.toBe(versionOf(agent, "other:model"));
+    const noted = defineAgent({
+      name: "stock",
+      model,
+      instructions: "Read stock.",
+      tools: [stock],
+      middleware: [defineMiddleware({ name: "notes" })],
+    });
+    expect(versionOf(noted, model)).not.toBe(versionOf(agent, model));
   });
 });

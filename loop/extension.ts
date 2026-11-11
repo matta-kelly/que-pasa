@@ -7,11 +7,18 @@ import {
   type Extension,
   GenerationTask,
   hook,
+  type PromptSection,
 } from "@earendil-works/pi-durable";
 import { z } from "zod";
-import type { Agent, Json, Runtime, Tool } from "../define/index.ts";
+import type {
+  Agent,
+  Json,
+  Middleware,
+  Runtime,
+  Tool,
+} from "../define/index.ts";
 import type { Resources } from "./resources.ts";
-import { RunDoc } from "./state.ts";
+import { MiddlewareDoc, RunDoc } from "./state.ts";
 import { messagesOf, resultOf, userText } from "./transcript.ts";
 
 /** Any agent, as the runtime holds it. */
@@ -30,7 +37,8 @@ const reminders = 2;
 export const extensionName = (agent: AnyAgent) => `agent-${agent.name}`;
 
 /**
- * An agent as one pi extension: its tools, and, for an agent with an output, the submit tool and the reminder. It holds
+ * An agent as one pi extension: its tools, a system prompt section for each middleware that adds to it, and, for an
+ * agent with an output, the submit tool and the reminder. It holds
  * no run's state: each call reads its run's document and transcript, so it serves every run of the agent, also one that
  * resumes in a new process.
  */
@@ -49,8 +57,35 @@ export function agentExtension(
   return defineExtension({
     name: extensionName(agent),
     tools,
+    sections: (agent.middleware ?? []).flatMap((middleware) =>
+      middleware.systemPrompt ? [sectionOf(middleware)] : [],
+    ),
     hooks: output ? [remind] : [],
   });
+}
+
+/** The key of a middleware's section of the system prompt. */
+export const sectionKey = (middleware: Middleware) =>
+  `middleware-${middleware.name}`;
+
+/**
+ * A middleware's section of the system prompt: rendered before each request from the state its run keeps, never from
+ * memory, so a run that resumes renders the same. pi sends it again only when it changes.
+ */
+function sectionOf(middleware: Middleware): PromptSection {
+  return {
+    key: sectionKey(middleware),
+    tag: false,
+    render: async (input, context) => {
+      const kept = await input.read.snapshot(
+        MiddlewareDoc,
+        input.conversationId,
+        middleware.name,
+        context,
+      );
+      return middleware.systemPrompt?.(kept?.state ?? null);
+    },
+  };
 }
 
 /** A que-pasa tool as a pi tool: pi checks the arguments against the JSON Schema, zod parses them, and the run's runtime goes in. */

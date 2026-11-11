@@ -1,6 +1,14 @@
 /** The person or program a run acts for. Every run carries one: no tool or agent passes it on. */
 export type Caller = { id: string };
 
+/** A run as it was started, read from its run document: what a resource and a middleware's `beforeAgent` get. */
+export type RunOf = {
+  runId: string;
+  caller: Caller;
+  /** Absent when the run was given none. */
+  context?: Json;
+};
+
 import type { Resource } from "./resource.ts";
 
 /** A JSON value: what a run keeps in storage, so it survives a restart. */

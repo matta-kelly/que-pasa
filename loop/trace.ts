@@ -81,7 +81,12 @@ import {
   reminder,
   submitTool,
 } from "./extension.ts";
-import { RunDoc, type RunState, type TraceParent } from "./state.ts";
+import {
+  MiddlewareDoc,
+  RunDoc,
+  type RunState,
+  type TraceParent,
+} from "./state.ts";
 import { messagesOf, resultOf } from "./transcript.ts";
 
 /** The trace extension's name: every run's conversation selects it, after its agent's. */
@@ -147,7 +152,12 @@ export function createTracing({
       `${GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT} ${agent.name}`,
       {
         kind: SpanKind.INTERNAL,
-        attributes: runAttributes(agent, run, !started.has(id), captureContent),
+        attributes: runAttributes(
+          agent,
+          run,
+          !started.has(id),
+          captureContent ? await systemOf(agent, id, reader, context) : [],
+        ),
       },
       parent,
     );
@@ -340,7 +350,7 @@ function runAttributes(
   agent: AnyAgent,
   run: RunState,
   resumed: boolean,
-  captureContent: boolean,
+  system: readonly string[],
 ): Attributes {
   const model = parseModel(run.model);
   const tools = toolDefinitions(agent);
@@ -353,15 +363,40 @@ function runAttributes(
     [ATTR_GEN_AI_REQUEST_MODEL]: model.modelId,
     [ATTR_ENDUSER_ID]: run.caller.id,
     "que_pasa.resumed": resumed,
-    ...(captureContent
+    ...(system.length > 0
       ? {
-          [ATTR_GEN_AI_SYSTEM_INSTRUCTIONS]: json([
-            { type: "text", content: agent.instructions },
-          ]),
+          [ATTR_GEN_AI_SYSTEM_INSTRUCTIONS]: json(
+            system.map((content) => ({ type: "text", content })),
+          ),
           [ATTR_GEN_AI_TOOL_DEFINITIONS]: json(tools),
         }
       : {}),
   };
+}
+
+/**
+ * The system prompt the run's model is given, in its parts and order: each middleware's section from the state the run
+ * keeps, then the agent's instructions.
+ */
+async function systemOf(
+  agent: AnyAgent,
+  id: ConversationId,
+  reader: DocumentReader,
+  context: Context,
+): Promise<string[]> {
+  const parts: string[] = [];
+  for (const middleware of agent.middleware ?? []) {
+    if (!middleware.systemPrompt) continue;
+    const kept = await reader.snapshot(
+      MiddlewareDoc,
+      id,
+      middleware.name,
+      context,
+    );
+    const text = middleware.systemPrompt(kept?.state ?? null);
+    if (text !== undefined) parts.push(text);
+  }
+  return [...parts, agent.instructions];
 }
 
 /** The tools as the model is given them: the agent's, and submit when it has an output. */
@@ -384,10 +419,14 @@ function toolDefinitions(agent: AnyAgent) {
     : tools;
 }
 
-/** The hash of what makes the agent what it is on this model: its instructions, its tools, its output and the model. */
+/** The hash of what makes the agent what it is on this model: its instructions, its middleware, its tools, its output and the model. */
 export function versionOf(agent: AnyAgent, model: string): string {
   const parts = {
     instructions: agent.instructions,
+    // Left out with none, so an agent with no middleware keeps the version it had.
+    ...(agent.middleware?.length
+      ? { middleware: agent.middleware.map((middleware) => middleware.name) }
+      : {}),
     tools: toolDefinitions(agent),
     model,
   };

@@ -33,6 +33,8 @@ export type GrepResult = Failed & {
   matches?: GrepMatch[];
   truncated?: boolean;
 };
+/** One file of a download, as Deep Agents' `FileDownloadResponse`: its bytes, or why there are none. */
+export type DownloadResult = Failed & { path: string; content?: Uint8Array };
 export type ExecuteResult = {
   /** stdout and stderr, as they came. */
   output: string;
@@ -63,6 +65,8 @@ export interface FileBackend {
   glob(pattern: string, path: string): Promise<GlobResult>;
   /** The lines of the files under a path that hold a text, as is (not a pattern), in files matching `glob` if given: by path, then line. */
   grep(pattern: string, path: string, glob?: string): Promise<GrepResult>;
+  /** Files, whole, as bytes: one result per path, in order, each with its own error. */
+  download(paths: readonly string[]): Promise<DownloadResult[]>;
 }
 
 /** Files, and commands: a backend that can run a shell command. */

@@ -82,6 +82,7 @@ async function crashAndResume(scenario: string, crashes = 1) {
       calls: number;
       ran: string[];
       messages: string[];
+      prompts: string[];
     }),
     host: { traceId, spanId },
     spans,
@@ -136,6 +137,15 @@ describe("a run killed at a crash point and opened again in a new process", () =
     const seen = await crashAndResume("resource");
     expect(seen.value).toEqual(done);
     expect(seen.ran).toEqual(["first in first", "first in second"]);
+  });
+
+  it("killed mid tool after its memory file changed: the new process's model gets the memory the run started with", async () => {
+    const seen = await crashAndResume("memory");
+    expect(seen.value).toEqual(done);
+    expect(seen.prompts).toEqual([
+      expect.stringContaining("memory of the first phase"),
+    ]);
+    expect(seen.prompts[0]).not.toContain("memory of the second phase");
   });
 
   it("killed mid replay-safe tool as often as pi's restart limit: the tool stops, and the model gets it as an error", async () => {

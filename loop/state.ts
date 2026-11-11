@@ -50,3 +50,18 @@ export const RunIndex = defineDocFamily<
   initial: () => ({ conversationId: null }),
   checkpointWhen: () => true,
 });
+
+/**
+ * What a middleware keeps for a run: what its `beforeAgent` gave back, written in the commit that makes the run, so a
+ * run that resumes in a new process reads the same. One per middleware, by its name.
+ */
+export const MiddlewareDoc = defineDocFamily<{ state: Json }, Json>({
+  kind: "que-pasa.middleware",
+  version: 1,
+  scope: "conversation",
+  history: "latest",
+  fork: "initial",
+  family: true,
+  initial: (state) => ({ state: state ?? null }),
+  checkpointWhen: () => true,
+});

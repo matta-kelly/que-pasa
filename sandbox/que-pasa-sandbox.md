@@ -44,12 +44,13 @@ The sandbox wraps the tools' effects; the agent stays in the host process.
 ## The backend
 
 A backend is the place where a run's files are and its commands run, behind one interface (`sandbox/backend.ts`). Two abilities, as Deep Agents' protocol has them:
-- files (`FileBackend`): `ls`, `read`, `write`, `edit`, `glob`, `grep` (literal text, not a pattern). A listing and a search come back by path, so the order is the same on any file system
+- files (`FileBackend`): `ls`, `read`, `write`, `edit`, `glob`, `grep` (literal text, not a pattern), `download` (files whole, as bytes, each with its own error, as Deep Agents' `download_files`). A listing and a search come back by path, so the order is the same on any file system
 - commands (`SandboxBackend`): files, plus `execute` and an `id`
 - one path rule for every backend (`sandbox/paths.ts`): a path is relative to the backend's root or absolute under it; any other is `invalid_path`. Every path a result gives is relative to the root
 - a backend gives its errors back in the result: `file_not_found`, `is_directory`, `invalid_path`, `permission_denied`, and an edit's `string_not_found` and `string_not_unique`. It throws only when it cannot run at all, such as a read-only file system
 - `shellBackend(exec)` (`sandbox/shell.ts`) builds a whole sandbox backend on one primitive, a script run in the root, as Deep Agents' `BaseSandbox` does. It needs only POSIX tools, which BusyBox has too. It is the only place files meet a shell
-- not built: delete, upload and download. No run needs them yet
+- `download` is for the host's code, such as memory ([[que-pasa-middleware#Memory]]), not a tool: the shell backend reads a file as base64 and gives up past 750,000 bytes
+- not built: delete and upload. No run needs them yet
 
 ## The backends
 
@@ -59,7 +60,7 @@ A backend is the place where a run's files are and its commands run, behind one 
 	- labelled with a hash of its options: a container of its name made with other options is refused, never used
 	- `network` is "none" by default; `close()` removes it
 - `view(backend, { read, write })`: a files backend over another, limited to some files
-	- a path outside it is answered as missing; a write outside its write files is refused, with the files it may write
+	- a path outside it is answered as missing, in a download too; a write outside its write files is refused, with the files it may write
 	- its search runs once on the backend, and keeps only its own files, as Deep Agents filters its path rules' results. The backend reads the files under the path to search them, and its limit counts them too, so a cut result says it is cut
 
 ## The tools

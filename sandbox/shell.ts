@@ -1,5 +1,6 @@
 import { posix } from "node:path";
 import type {
+  DownloadResult,
   EditResult,
   ExecuteResult,
   FileInfo,
@@ -12,7 +13,7 @@ import type {
   WriteResult,
 } from "./backend.ts";
 import { asArg, fromRoot } from "./paths.ts";
-import type { Ran, Script } from "./process.ts";
+import { keep, type Ran, type Script } from "./process.ts";
 
 /** Runs one script in the backend's root: `sh -c <script> sh <args…>`, with its stdin. */
 export type Exec = (call: Script) => Promise<Ran>;
@@ -41,7 +42,7 @@ function failed(what: string, ran: Ran): never {
 /**
  * A whole sandbox backend in POSIX `sh`, on one primitive that runs a script in the root (Deep Agents' `BaseSandbox`).
  * A path is always a positional argument and content always goes over stdin: nothing a model gives is part of a
- * script. It needs no other runtime in the sandbox: `find`, `awk`, `grep`, `cat`, `mkdir` and `dirname`, which
+ * script. It needs no other runtime in the sandbox: `find`, `awk`, `grep`, `cat`, `mkdir`, `dirname` and `base64`, which
  * BusyBox has too.
  */
 export function shellBackend({
@@ -210,6 +211,38 @@ else exit ${missing}; fi`,
         matches: matches.slice(0, maxMatches),
         ...(truncated ? { truncated } : {}),
       };
+    },
+
+    async download(paths): Promise<DownloadResult[]> {
+      const results: DownloadResult[] = [];
+      for (const path of paths) {
+        const at = fromRoot(root, path);
+        if (at === undefined) {
+          results.push({ path, ...invalid });
+          continue;
+        }
+        // As base64, so the bytes come back as they are over a text stream.
+        const ran = await exec({
+          script: `[ -e "$1" ] || exit ${missing}; [ -d "$1" ] && exit ${directory}; base64 < "$1"`,
+          args: [asArg(at)],
+        });
+        if (ran.code === missing)
+          results.push({ path, error: "file_not_found" });
+        else if (ran.code === directory)
+          results.push({ path, error: "is_directory" });
+        else if (ran.code !== 0) failed("download", ran);
+        else if (ran.truncated) {
+          throw new Error(
+            `download: ${path} is larger than the ${(keep / 4) * 3} bytes one download reads`,
+          );
+        } else {
+          results.push({
+            path,
+            content: new Uint8Array(Buffer.from(ran.stdout, "base64")),
+          });
+        }
+      }
+      return results;
     },
 
     async execute(command, options = {}): Promise<ExecuteResult> {

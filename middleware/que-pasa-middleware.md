@@ -1,0 +1,60 @@
+---
+type: component
+description: "que-pasa's middleware: optional behaviours on an agent's loop, after LangChain's middleware, built on pi-durable's documents and prompt sections, and memory on it, after Deep Agents' MemoryMiddleware. Read for what a middleware is, how each LangChain hook maps onto pi-durable, what memory loads and when, and where it differs from LangChain and Deep Agents."
+status: running
+---
+An optional behaviour on an agent's loop: a name and hooks, after LangChain's middleware. The primitive is `defineMiddleware` in `define/`; the loop runs its hooks; the middleware que-pasa ships are `middleware/`, exported as `@mku1tra/que-pasa/middleware`.
+- [[#The primitive]] a name, a state, and hooks
+- [[#The hooks on pi-durable]] each LangChain hook, and the durable part it is built on
+- [[#Memory]] files an agent always has in its context
+- [[#Where it differs]] from LangChain and Deep Agents
+
+- [[que-pasa]]: the harness it is part of
+- [[que-pasa-loop]]: the loop the hooks run in, and the invariant that a run keeps its middleware's state
+- [[que-pasa-sandbox]]: the backend memory reads its files through
+
+---
+## The primitive
+
+- middleware: an optional behaviour on an agent's loop, given in the agent's `middleware` list, in order
+- name: kebab-case, one per agent, the key of what it keeps
+- state: what it keeps for a run, as JSON, so the run keeps it in storage and a run that resumes in a new process has the same
+- hooks, each optional:
+	- `beforeAgent(run)`: LangChain's `before_agent`. Once, when the run is made, from the run as it is started (`runId`, `caller`, `context`). What it gives back is its state
+	- `systemPrompt(state)`: what LangChain's `wrap_model_call` does when it appends to the system message. Before each model request, from the state the run keeps. Its state is null when it has no `beforeAgent`, or the run was made before the agent had it
+- not built: LangChain's `before_model`, `after_model`, `wrap_tool_call` and `after_agent`. They come as more optional hooks on the same type, with no break
+
+## The hooks on pi-durable
+
+| LangChain | What it does | pi-durable | que-pasa |
+|---|---|---|---|
+| `before_agent` → a state update | runs at the start, may load data | a document written in the commit that makes the run | `beforeAgent(run)`, its result kept in `MiddlewareDoc` |
+| state (`memory_contents`) | what a middleware keeps | a conversation document family | `MiddlewareDoc`, one per middleware, by its name |
+| `wrap_model_call` → `append_to_system_message` | adds to the system prompt on each call | a prompt section of the agent's extension, rendered from committed documents before each request | `systemPrompt(state)`, a section keyed `middleware-<name>` |
+| `before_model`, `after_model` | change the request, read the answer | `beforeRequest`, `afterResponse` | not built |
+| `wrap_tool_call` | around each tool call: approval, limits | `beforeTool`, `afterTool` | not built |
+| `after_agent` | at the end | `afterRun` | not built |
+
+- durable by construction: `beforeAgent` runs once, before the commit that makes the run, and that commit keeps what it gave. A section reads only what is kept. So a run that resumes, in a new process or after a source changed, sees what it started with
+- a `beforeAgent` that throws fails the run before anything is kept: `run(runId)` again starts it fresh
+- pi sends a section again only when its text changes, so a middleware's section keeps the provider's prompt cache warm
+- the system prompt is each middleware's section, in the agent's order, then the agent's instructions, which pi renders last
+- a trace's `gen_ai.system_instructions`, with content captured, holds the same parts in the same order; the agent's version hashes its middleware names
+
+## Memory
+
+`memory({ backend, sources, systemPrompt })` (`middleware/memory.ts`): files an agent always has in its context, a port of Deep Agents' `MemoryMiddleware`.
+- `backend`: where the files are, a `FileBackend`, such as `local({ root: <workspace> })`. It reads them with `download`
+- `sources`: their paths, loaded in this order
+- `systemPrompt`: the prompt the memory goes in, at `{agent_memory}`. Deep Agents' by default. One without the slot is refused at definition
+- `beforeAgent`: downloads the sources, as UTF-8 text. A source that is not there is left out, as Deep Agents does; any other error, or a file that is not UTF-8, fails the run
+- `systemPrompt`: each source as its path, a blank line and its text, with its HTML comments left out (authoring notes), joined by blank lines. "(No memory loaded)" when none was there
+- in a workspace: the files are in `memory/`, an agent picks them in its `.ts`, and its role's note links them, so the note shows what the agent loads ([[que-pasa#Workspace]])
+
+## Where it differs
+
+- from LangChain: a hook's state is the run's, in pi-durable's storage, not a graph's state; `before_agent` runs once per run, since a run is one input (the thread and run split is not built)
+- from LangChain: `systemPrompt` is the one part of `wrap_model_call` built: it adds to the system prompt and does not wrap the call. A whole wrap is not built
+- from Deep Agents: memory is read only. Its prompt keeps Deep Agents' `<agent_memory>` block and its guidance on trust, and leaves out the guidance to save to memory with `edit_file`
+- from Deep Agents: the memory section comes before the agent's instructions, since pi renders instructions last. Deep Agents appends memory after its base prompt
+- from Deep Agents: `add_cache_control` is not needed: pi keeps an unchanged section cached by itself
