@@ -7,7 +7,9 @@
   // host, before the CLI resolves the image, for VS Code and `just` alike. A failed pull says so and the
   // machine's copy is used; with no copy, the CLI's own pull fails and says why.
   "image": "ghcr.io/matta-kelly/que-pasa-dev:main",
-  "initializeCommand": "podman pull ghcr.io/matta-kelly/que-pasa-dev:main || echo 'could not pull ghcr.io/matta-kelly/que-pasa-dev:main: the copy this machine has is used' >&2",
+  // Then the workspace's own network (and its pod, when the repo has .devcontainer/pod.yaml), which the
+  // container joins below: scripts/workspace.sh, from kinetic's template.
+  "initializeCommand": "(podman pull ghcr.io/matta-kelly/que-pasa-dev:main || echo 'could not pull ghcr.io/matta-kelly/que-pasa-dev:main: the copy this machine has is used' >&2) && scripts/workspace.sh up ${localWorkspaceFolder}",
 
   // Mount the repo at its host path, so absolute paths in caches and tool output
   // mean the same thing inside the container and out.
@@ -19,6 +21,10 @@
   // checkout's container: 3 CPUs, and its shares when the host is contended.
   "runArgs": [
     "--userns=keep-id:uid=1000,gid=1000",
+    "--network",
+    "que-pasa-${localWorkspaceFolderBasename}",
+    "--network-alias",
+    "que-pasa-${localWorkspaceFolderBasename}-app",
     "--security-opt",
     "label=disable",
     "--cpus=3",

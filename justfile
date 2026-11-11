@@ -40,13 +40,14 @@ down:
     #!/usr/bin/env bash
     set -euo pipefail
     c=$(just _container)
-    if [ -z "$c" ]; then
-        exit 0
+    if [ -n "$c" ]; then
+        for v in $(podman inspect --format '{{{{range .Mounts}}{{{{if eq .Type "volume"}}{{{{.Name}} {{{{end}}{{{{end}}' "$c"); do
+            podman volume rm -f "$v" >/dev/null 2>&1 || true
+        done
+        podman rm -f "$c" >/dev/null
     fi
-    for v in $(podman inspect --format '{{{{range .Mounts}}{{{{if eq .Type "volume"}}{{{{.Name}} {{{{end}}{{{{end}}' "$c"); do
-        podman volume rm -f "$v" >/dev/null 2>&1 || true
-    done
-    podman rm -f "$c" >/dev/null
+    # The workspace's network, its pod and its route, after the container that joins the network.
+    scripts/workspace.sh down "{{root}}"
 
 # The id of this checkout's container, by the label the CLI sets by default. Nothing reads the name the
 # CLI gives it.
