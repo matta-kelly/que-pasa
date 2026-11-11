@@ -18,10 +18,11 @@
 # The router: one Caddy container for the machine, started on demand and never removed here. It joins each
 # workspace's network and proxies <name>.localhost to <name>-app, the dev container's alias, since a container
 # cannot reach a port published on the host's loopback. Its state is a Caddyfile and one route file per workspace.
+# It listens on 127.0.0.1:80, which a rootless podman can bind once net.ipv4.ip_unprivileged_port_start is 80.
 set -euo pipefail
 
 router=${WORKSPACE_ROUTER:-workspace-router}
-router_port=${WORKSPACE_ROUTER_PORT:-8080}
+router_port=${WORKSPACE_ROUTER_PORT:-80}
 router_state=${WORKSPACE_ROUTER_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/workspace-router}
 router_image=docker.io/library/caddy:2.10
 
@@ -139,6 +140,9 @@ case ${1:-} in
 up) shift; up "$@" ;;
 down) shift; down "$@" ;;
 name) name_of "$(cd "$2" && pwd)" ;;
-url) echo "http://$(name_of "$(cd "$2" && pwd)").localhost:$router_port" ;;
+url)
+  url=http://$(name_of "$(cd "$2" && pwd)").localhost
+  [ "$router_port" = 80 ] && echo "$url" || echo "$url:$router_port"
+  ;;
 *) die "usage: workspace.sh up [--attempt] <root> | down <root> | name <root> | url <root>" ;;
 esac
