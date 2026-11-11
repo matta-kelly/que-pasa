@@ -51,7 +51,7 @@ Install it from npm: `npm install @mku1tra/que-pasa zod`. zod is a peer dependen
 
 ## Release
 
-Set the version in `package.json`, commit, land, and push its tag, `v<version>`. `.github/workflows/publish.yml` runs the check set and publishes on npm by trusted publishing (no token, with provenance). A ruleset lets only an admin of the repo make a version tag. A version npm has is not published again. A published version cannot change: npm unpublishes only within 72 hours.
+A land is a version when its commits ask for one: crate reads their types (Conventional Commits) on the server, tags main `v<version>`, and copies the tag to GitHub ([crate](https://github.com/matta-kelly/crate#release)). While que-pasa is at 0.x, a breaking change bumps minor, and `feat`, `fix` and `perf` bump patch. `.github/workflows/publish.yml` runs the check set, sets `package.json`'s version from the tag, and publishes on npm by trusted publishing (no token, with provenance). `package.json`'s version in git is not kept: the tag is the version. A ruleset lets only crate's deploy key, or an admin of the repo, make a version tag. A version npm has is not published again. A published version cannot change: npm unpublishes only within 72 hours.
 
 ## Ship
 

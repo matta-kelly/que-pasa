@@ -1,7 +1,8 @@
 # Publishes @mku1tra/que-pasa on npm when a version tag `v<version>` is pushed: the same check set first, then
-# `npm publish` by trusted publishing (OIDC), with no token and with provenance. The tag is the gate: a ruleset lets
-# only an admin of the repo make a version tag. npmjs.com holds the other half: the package's Trusted Publisher names
-# this repo and this file.
+# `npm publish` by trusted publishing (OIDC), with no token and with provenance. crate makes the tag on the server from
+# the commit types, and copies it here; a ruleset lets only its deploy key, or an admin of the repo, make a version tag.
+# The tag is the version: package.json's is set from it here, never committed. npmjs.com holds the other half: the
+# package's Trusted Publisher names this repo and this file.
 name: publish
 
 on:
@@ -29,9 +30,9 @@ jobs:
           registry-url: https://registry.npmjs.org
       # Trusted publishing needs npm 11.5.1 or later; Node 22 has npm 10.
       - run: npm install --global npm@11.21.0
-      - name: The tag is the package's version
-        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
       - run: scripts/check.sh all
+      - name: The tag is the package's version
+        run: npm pkg set version="${GITHUB_REF_NAME#v}"
       # A version npm has already is left as it is: a run again, or the first version, published by hand.
       - name: Publish, if npm does not have this version
         run: |
