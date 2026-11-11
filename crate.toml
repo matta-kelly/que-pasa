@@ -1,0 +1,3 @@
+# crate (github.com/matta-kelly/crate) checks every push to main on the server, in this image.
+crate = "1"
+image = "dev"
