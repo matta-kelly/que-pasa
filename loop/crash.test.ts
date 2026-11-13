@@ -82,6 +82,7 @@ async function crashAndResume(scenario: string, crashes = 1) {
       calls: number;
       ran: string[];
       messages: string[];
+      models: string[];
       prompts: string[];
     }),
     host: { traceId, spanId },
@@ -125,7 +126,7 @@ describe("a run killed at a crash point and opened again in a new process", () =
     expect(interrupted?.parentSpanId).toBe(runs[0]?.spanId);
   });
 
-  it("killed mid replay-safe tool: the tool runs again, with the context the run was started with", async () => {
+  it("killed mid replay-safe tool: the tool runs again, with its conversation's context", async () => {
     const seen = await crashAndResume("safe-tool");
     expect(seen.value).toEqual(done);
     expect(seen.ran).toEqual(["first", "first"]);
@@ -133,7 +134,7 @@ describe("a run killed at a crash point and opened again in a new process", () =
     expect(seen.calls).toBe(1);
   });
 
-  it("killed mid tool: the new process resolves the run's resources from the context the run was started with", async () => {
+  it("killed mid tool: the new process resolves the conversation's resources again, from its context", async () => {
     const seen = await crashAndResume("resource");
     expect(seen.value).toEqual(done);
     expect(seen.ran).toEqual(["first in first", "first in second"]);
@@ -153,6 +154,23 @@ describe("a run killed at a crash point and opened again in a new process", () =
     expect(seen.value).toEqual(done);
     expect(seen.ran).toEqual(["first", "first", "first", "first", "first"]);
     expect(seen.messages).toContain("step error");
+  });
+
+  it("killed mid a conversation's second run: goes on with that run's model, and gives that run's result", async () => {
+    const seen = await crashAndResume("second-run");
+    expect(seen.value).toEqual(done);
+    expect(seen.models).toEqual(["main", "fallback", "fallback"]);
+    expect(seen.messages).toEqual([
+      "user",
+      "assistant",
+      "submit",
+      "user",
+      "assistant",
+      "step error",
+      "assistant",
+      "submit",
+    ]);
+    expect(seen.calls).toBe(1);
   });
 
   it("killed after its submit: gives back the kept result, with no model call", async () => {

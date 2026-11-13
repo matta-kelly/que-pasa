@@ -7,6 +7,7 @@ import {
   type Extension,
   GenerationTask,
   hook,
+  LiveDoc,
   type PromptSection,
 } from "@earendil-works/pi-durable";
 import { z } from "zod";
@@ -18,8 +19,8 @@ import type {
   Tool,
 } from "../define/index.ts";
 import type { Resources } from "./resources.ts";
-import { MiddlewareDoc, RunDoc } from "./state.ts";
-import { messagesOf, resultOf, userText } from "./transcript.ts";
+import { ConversationDoc, MiddlewareDoc } from "./state.ts";
+import { hasResult, messagesOf, userText } from "./transcript.ts";
 
 /** Any agent, as the runtime holds it. */
 export type AnyAgent = Agent<z.ZodObject | undefined, Json | undefined>;
@@ -38,9 +39,9 @@ export const extensionName = (agent: AnyAgent) => `agent-${agent.name}`;
 
 /**
  * An agent as one pi extension: its tools, a system prompt section for each middleware that adds to it, and, for an
- * agent with an output, the submit tool and the reminder. It holds
- * no run's state: each call reads its run's document and transcript, so it serves every run of the agent, also one that
- * resumes in a new process.
+ * agent with an output, the submit tool and the reminder. It holds no conversation's state: each call reads its
+ * conversation's documents and transcript, so it serves every conversation of the agent, also one that resumes in a new
+ * process.
  */
 export function agentExtension(
   agent: AnyAgent,
@@ -69,8 +70,8 @@ export const sectionKey = (middleware: Middleware) =>
   `middleware-${middleware.name}`;
 
 /**
- * A middleware's section of the system prompt: rendered before each request from the state its run keeps, never from
- * memory, so a run that resumes renders the same. pi sends it again only when it changes.
+ * A middleware's section of the system prompt: rendered before each request from the state its conversation keeps,
+ * never from memory, so a run that resumes renders the same. pi sends it again only when it changes.
  */
 function sectionOf(middleware: Middleware): PromptSection {
   return {
@@ -130,11 +131,15 @@ function submit(output: z.ZodObject) {
   });
 }
 
-/** Reminds an agent with an output that answered without submitting, at most `reminders` times, counted in its transcript. */
+/**
+ * Reminds an agent with an output that answered without submitting, at most `reminders` times per run, counted in the
+ * run's own entries: from pi's first entry of the run, so an earlier run's submit or reminders do not count.
+ */
 const remind = hook(GenerationTask, {
   onYield: async (_answer, api, context) => {
-    const messages = await messagesOf(api, context);
-    if (resultOf(messages, submitTool)) return undefined;
+    const live = await api.snapshot(LiveDoc, api.conversationId, context);
+    const messages = await messagesOf(api, context, live?.run?.first);
+    if (hasResult(messages, submitTool)) return undefined;
     const sent = messages.filter(
       (message) => userText(message) === reminder,
     ).length;
@@ -142,26 +147,32 @@ const remind = hook(GenerationTask, {
   },
 });
 
-/** The runtime of the call's run, from its run document: its caller, its context, and the resources the tool uses. */
+/** The runtime of the call, from its conversation's document: its caller, its context, and the resources the tool uses. */
 async function runtimeOf(
   tool: Tool<z.ZodObject, Json | undefined>,
   resources: Resources,
   api: DocumentReader & { readonly conversationId: ConversationId },
   context: Context,
 ): Promise<Runtime<Json | undefined>> {
-  const run = await api.snapshot(RunDoc, api.conversationId, context);
-  if (!run) throw new Error("the run has no run document");
+  const kept = await api.snapshot(ConversationDoc, api.conversationId, context);
+  if (!kept) throw new Error("the conversation has no document");
+  const { conversation, caller, context: given } = kept;
+  const of = {
+    conversation,
+    caller,
+    ...(given === undefined ? {} : { context: given }),
+  };
   const uses = new Set((tool.uses ?? []).map((resource) => resource.name));
   return {
-    caller: run.caller,
-    context: run.context,
+    caller,
+    context: given,
     use: async (resource) => {
       if (!uses.has(resource.name)) {
         throw new Error(
           `tool "${tool.name}" uses resource "${resource.name}", which it does not declare in uses`,
         );
       }
-      return resources.use(run, resource);
+      return resources.use(of, resource);
     },
   };
 }

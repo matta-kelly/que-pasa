@@ -3,7 +3,7 @@ type: component
 description: "que-pasa's sandbox: where a run's file and command tools act, behind one backend interface, after LangChain Deep Agents. Read for what it wraps and why, what each backend's wall stops, the two abilities, the backends and the view, the tools and their replay rules, and where it differs from Deep Agents."
 status: running
 ---
-Where a run's tools read, write and run commands: a backend, behind one interface, which the host gives each run. The code is `sandbox/`, exported as `@mku1tra/que-pasa/sandbox`, after LangChain Deep Agents' backends and filesystem tools.
+Where a run's tools read, write and run commands: a backend, behind one interface, which the host gives each conversation. The code is `sandbox/`, exported as `@mku1tra/que-pasa/sandbox`, after LangChain Deep Agents' backends and filesystem tools.
 - [[#What it wraps]] the tools' effects, not the agent
 - [[#What each wall stops]] the threat model, per backend
 - [[#The backend]] two abilities, and one path rule
@@ -20,8 +20,8 @@ Where a run's tools read, write and run commands: a backend, behind one interfac
 The sandbox wraps the tools' effects; the agent stays in the host process.
 - the loop, its storage and the host's credentials are in the host process, so code a tool runs never reaches them
 - a crash in the sandbox ends one tool call, not the run: the model gets an error result
-- the host gives each run its backend as the `Sandbox` resource ([[define-tool#Reaching an outside system]]), resolved from the run as it was started: a run that resumes in a new process gets the same container
-- policy is the host's: which image, which mounts, network, read-only, and each run's view. que-pasa holds none
+- the host gives each conversation its backend as the `Sandbox` resource ([[define-tool#Reaching an outside system]]), resolved from the conversation as its first run made it: every run on it, also one that resumes in a new process, gets the same container
+- policy is the host's: which image, which mounts, network, read-only, and each conversation's view. que-pasa holds none
 
 ## What each wall stops
 
@@ -83,7 +83,7 @@ A backend is the place where a run's files are and its commands run, behind one 
 
 ## Where it differs from Deep Agents
 
-- the backend comes from the run, not the agent: the host provides it per run as a resource, so one agent definition runs in any sandbox, and a run that resumes gets its own back
+- the backend comes from the conversation, not the agent: the host provides it per conversation as a resource, so one agent definition runs in any sandbox, and a run that resumes gets its own back
 - a view answers a path outside it as missing, where Deep Agents' path rules answer denied: a model told "missing" keeps to its task, and does not probe
 - `execute` is given or not by the agent's tool list, which is fixed; Deep Agents drops it when the backend has none. On a backend with none it answers as Deep Agents does
 - every operation is async; errors are codes, and the tools word them as Deep Agents does

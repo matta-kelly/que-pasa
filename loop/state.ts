@@ -2,6 +2,7 @@ import {
   type ConversationId,
   defineDoc,
   defineDocFamily,
+  type UsageState,
 } from "@earendil-works/pi-durable";
 import type { Caller, Json } from "../define/index.ts";
 
@@ -12,38 +13,66 @@ export type TraceParent = {
   traceFlags: number;
 };
 
-/** What a run keeps besides its transcript: who it is for, and what its tools are given. One per run's conversation. */
-export type RunState = {
-  /** The host's id for the run. */
-  runId: string;
+/**
+ * What a conversation keeps besides its transcript: what its first run made it with, which every run on it gives again,
+ * and its runs. One per conversation.
+ */
+export type ConversationState = {
+  /** The host's key for the conversation. */
+  conversation: string;
   /** The agent it runs. */
   agent: string;
-  /** The model it runs on, "provider:model-id": the agent's, or the one the run was started with. */
-  model: string;
   caller: Caller;
-  /** Absent when the run was given none. */
+  /** Absent when it was given none. */
   context?: Json;
+  /** Its runs' ids, in the order they were admitted: the last is the one going on, or the last that ended. */
+  runs: string[];
+};
+
+/** The conversation's own document, written in the commit that makes it. */
+export const ConversationDoc = defineDoc<ConversationState>({
+  kind: "que-pasa.conversation",
+  version: 1,
+  scope: "conversation",
+  history: "latest",
+  fork: "initial",
+  initial: () => ({
+    conversation: "",
+    agent: "",
+    caller: { id: "" },
+    runs: [],
+  }),
+  checkpointWhen: () => true,
+});
+
+/** What a run keeps, besides its submission: one per run id, written in the commit that admits it. */
+export type RunState = {
+  /** The model it runs on, "provider:model-id": the agent's, or the one the run was given. */
+  model: string;
+  /** What the conversation had spent when the run was admitted: the run's usage is what it spent after. */
+  spent: UsageState;
   /** The parent of each of its trace's segments: the host's span it was started in, or its first segment. */
   trace?: TraceParent;
 };
 
-/** The run's own document, written in the commit that makes its conversation. */
-export const RunDoc = defineDoc<RunState>({
+/** A run's document, by its run id. */
+export const RunDoc = defineDocFamily<RunState, null>({
   kind: "que-pasa.run",
   version: 1,
   scope: "conversation",
   history: "latest",
   fork: "initial",
-  initial: () => ({ runId: "", agent: "", model: "", caller: { id: "" } }),
+  family: true,
+  initial: () => ({ model: "", spent: { models: {}, tools: {} } }),
   checkpointWhen: () => true,
 });
 
-/** Where a run is: its conversation, one document per run id, so a run started again finds the one it started. */
-export const RunIndex = defineDocFamily<
+/** Where a conversation is: one document per host key, so a run on the key finds the conversation its first run made. */
+export const ConversationIndex = defineDocFamily<
   { conversationId: ConversationId | null },
   null
 >({
-  kind: "que-pasa.run-index",
+  kind: "que-pasa.conversation-index",
   version: 1,
   scope: "session",
   family: true,
@@ -52,8 +81,8 @@ export const RunIndex = defineDocFamily<
 });
 
 /**
- * What a middleware keeps for a run: what its `beforeAgent` gave back, written in the commit that makes the run, so a
- * run that resumes in a new process reads the same. One per middleware, by its name.
+ * What a middleware keeps for a conversation: what its `beforeAgent` gave back, written in the commit that makes the
+ * conversation, so a run that resumes in a new process reads the same. One per middleware, by its name.
  */
 export const MiddlewareDoc = defineDocFamily<{ state: Json }, Json>({
   kind: "que-pasa.middleware",

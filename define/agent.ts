@@ -3,7 +3,7 @@ import type { Middleware } from "./middleware.ts";
 import type { Json } from "./runtime.ts";
 import type { Tool } from "./tool.ts";
 
-/** One agent's picks from a workspace: the core every agent has. C is the context its runs are given, which its tools read. */
+/** One agent's picks from a workspace: the core every agent has. C is the context its conversations are given, which its tools read. */
 export type Agent<
   O extends z.ZodObject | undefined = z.ZodObject | undefined,
   C extends Json | undefined = undefined,
@@ -12,7 +12,7 @@ export type Agent<
   name: string;
   /** "provider:model-id". */
   model: string;
-  /** What the agent is and how it works: the start of its system prompt. */
+  /** What the agent is and how it works: its system prompt, after its middleware's sections. */
   instructions: string;
   /** Passed explicitly: the agent can call these and no others. */
   tools: readonly Tool<z.ZodObject, C>[];

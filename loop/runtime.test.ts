@@ -24,6 +24,7 @@ import {
   type RunOptions,
   type RunUsage,
 } from "./index.ts";
+import { reminder } from "./extension.ts";
 import { scripted } from "./scripted.fixture.ts";
 
 const caller = { id: "matt" };
@@ -35,7 +36,10 @@ async function once<
 >(
   agent: Agent<O, C>,
   input: string,
-  { models, ...options }: Omit<RunOptions<C>, "runId"> & { models: Models },
+  {
+    models,
+    ...options
+  }: Omit<RunOptions<C>, "conversation" | "runId"> & { models: Models },
 ) {
   const runtime = await openRuntime({
     storage: new MemoryStorage(),
@@ -44,6 +48,7 @@ async function once<
   });
   try {
     return await runtime.run(agent, input, {
+      conversation: "chat-1",
       runId: "run-1",
       ...options,
     } as RunOptions<C>);
@@ -600,10 +605,18 @@ describe("a runtime", () => {
     });
     try {
       await expect(
-        runtime.run(geo, "Capital of France?", { runId: "a", caller }),
+        runtime.run(geo, "Capital of France?", {
+          conversation: "a",
+          runId: "a",
+          caller,
+        }),
       ).resolves.toBe("Paris.");
       await expect(
-        runtime.run(geo, "Capital of France?", { runId: "a", caller }),
+        runtime.run(geo, "Capital of France?", {
+          conversation: "a",
+          runId: "a",
+          caller,
+        }),
       ).resolves.toBe("Paris.");
       expect(faux.state.callCount).toBe(1);
     } finally {
@@ -627,10 +640,18 @@ describe("a runtime", () => {
     });
     try {
       await expect(
-        runtime.run(geo, "Capital of France?", { runId: "a", caller }),
+        runtime.run(geo, "Capital of France?", {
+          conversation: "a",
+          runId: "a",
+          caller,
+        }),
       ).resolves.toBe("Paris.");
       await expect(
-        runtime.run(judge, "Judge this.", { runId: "b", caller }),
+        runtime.run(judge, "Judge this.", {
+          conversation: "b",
+          runId: "b",
+          caller,
+        }),
       ).resolves.toEqual({
         verdict: "raise",
         note: "no",
@@ -660,11 +681,13 @@ describe("a runtime", () => {
       );
     try {
       await runtime.run(geo, "Capital of France?", {
+        conversation: "a",
         runId: "a",
         caller,
         onUsage,
       });
       await runtime.run(geo, "Capital of Italy?", {
+        conversation: "b",
         runId: "b",
         caller,
         onUsage,
@@ -686,14 +709,18 @@ describe("a runtime", () => {
     });
     try {
       await expect(
-        runtime.run(judge, "Judge this.", { runId: "a", caller }),
+        runtime.run(judge, "Judge this.", {
+          conversation: "a",
+          runId: "a",
+          caller,
+        }),
       ).rejects.toThrow('agent "judge" was not given when the runtime opened');
     } finally {
       await runtime.close();
     }
   });
 
-  it("refuses a run id that belongs to another agent's run", async () => {
+  it("refuses a run on a conversation that is another agent's", async () => {
     const { faux, models, geo, judge } = setup();
     faux.setResponses([fauxAssistantMessage([fauxText("Paris.")])]);
     const runtime = await openRuntime({
@@ -702,10 +729,18 @@ describe("a runtime", () => {
       agents: [geo, judge],
     });
     try {
-      await runtime.run(geo, "Capital of France?", { runId: "a", caller });
+      await runtime.run(geo, "Capital of France?", {
+        conversation: "a",
+        runId: "a",
+        caller,
+      });
       await expect(
-        runtime.run(judge, "Judge this.", { runId: "a", caller }),
-      ).rejects.toThrow('run "a" is of agent "geo", not "judge"');
+        runtime.run(judge, "Judge this.", {
+          conversation: "a",
+          runId: "a",
+          caller,
+        }),
+      ).rejects.toThrow('conversation "a" is of agent "geo", not "judge"');
     } finally {
       await runtime.close();
     }
@@ -772,6 +807,7 @@ describe("a run's model", () => {
     });
     try {
       await runtime.run(geo, "Capital of France?", {
+        conversation: "a",
         runId: "a",
         caller,
         model: fallback,
@@ -779,6 +815,7 @@ describe("a run's model", () => {
       let seen: Message[] = [];
       await expect(
         runtime.run(geo, "Capital of France?", {
+          conversation: "a",
           runId: "a",
           caller,
           onMessages: (m) => (seen = m),
@@ -819,7 +856,7 @@ describe("a run's resources", () => {
     fauxAssistantMessage([fauxText("Done.")]),
   ];
 
-  it("are resolved by the host from the run, once per run, and given to its tools", async () => {
+  it("are resolved by the host from the conversation, once per run, and given to its tools", async () => {
     const { faux, models, model } = scripted();
     faux.setResponses(twice());
     const agent = defineAgent({
@@ -834,8 +871,8 @@ describe("a run's resources", () => {
       models,
       agents: [agent],
       resources: [
-        provide(box, ({ runId, caller, context }) => {
-          seen.push(`${runId} ${caller.id} ${JSON.stringify(context)}`);
+        provide(box, ({ conversation, caller, context }) => {
+          seen.push(`${conversation} ${caller.id} ${JSON.stringify(context)}`);
           return { root: (context as { root: string }).root };
         }),
       ],
@@ -843,6 +880,7 @@ describe("a run's resources", () => {
     let messages: Message[] = [];
     try {
       await runtime.run(agent, "Where?", {
+        conversation: "chat-1",
         runId: "run-1",
         caller,
         context: { root: "/work" },
@@ -851,7 +889,7 @@ describe("a run's resources", () => {
     } finally {
       await runtime.close();
     }
-    expect(seen).toEqual(['run-1 matt {"root":"/work"}']);
+    expect(seen).toEqual(['chat-1 matt {"root":"/work"}']);
     const results = messages.filter((m) => m.role === "toolResult");
     expect(results.map((m) => JSON.stringify(m.content))).toEqual([
       expect.stringContaining("/work"),
@@ -947,6 +985,7 @@ describe("a run's resources", () => {
     let messages: Message[] = [];
     try {
       await runtime.run(agent, "Where?", {
+        conversation: "chat-1",
         runId: "run-1",
         caller,
         context: { root: "/work" },
@@ -1008,9 +1047,9 @@ describe("a run's middleware", () => {
     );
   });
 
-  it("runs beforeAgent once per run: a run started again keeps what it gave", async () => {
+  it("runs beforeAgent once per conversation: a run started again, and a later run, keep what it gave", async () => {
     const { faux, models, model, prompts, answer } = seeing();
-    faux.setResponses([answer("One.")]);
+    faux.setResponses([answer("One."), answer("Two.")]);
     let calls = 0;
     const counted = defineMiddleware<{ call: number }>({
       name: "counted",
@@ -1030,13 +1069,19 @@ describe("a run's middleware", () => {
       agents: [agent],
     });
     try {
-      await runtime.run(agent, "Go.", { runId: "run-1", caller });
-      await runtime.run(agent, "Go.", { runId: "run-1", caller });
+      const go = (runId: string) =>
+        runtime.run(agent, "Go.", { conversation: "chat-1", runId, caller });
+      await go("run-1");
+      await go("run-1");
+      await go("run-2");
     } finally {
       await runtime.close();
     }
     expect(calls).toBe(1);
-    expect(prompts).toEqual([expect.stringContaining("call 1")]);
+    expect(prompts).toEqual([
+      expect.stringContaining("call 1"),
+      expect.stringContaining("call 1"),
+    ]);
   });
 
   it("fails a run whose beforeAgent throws, keeping nothing: the run started again starts fresh", async () => {
@@ -1065,15 +1110,298 @@ describe("a run's middleware", () => {
     });
     try {
       await expect(
-        runtime.run(agent, "Go.", { runId: "run-1", caller }),
+        runtime.run(agent, "Go.", {
+          conversation: "run-1",
+          runId: "run-1",
+          caller,
+        }),
       ).rejects.toThrow("the source is not there yet");
       fail = false;
       await expect(
-        runtime.run(agent, "Go.", { runId: "run-1", caller }),
+        runtime.run(agent, "Go.", {
+          conversation: "run-1",
+          runId: "run-1",
+          caller,
+        }),
       ).resolves.toBe("Done.");
     } finally {
       await runtime.close();
     }
     expect(prompts).toEqual([expect.stringContaining("loaded")]);
+  });
+});
+
+describe("a conversation", () => {
+  /** The user texts of a request, oldest first. */
+  const asked = (messages: readonly Message[]) =>
+    messages.flatMap((m) =>
+      m.role === "user" && typeof m.content === "string" ? [m.content] : [],
+    );
+
+  it("keeps its history across runs: a later run's model gets the earlier runs' messages, and each run gives its own answer", async () => {
+    const { faux, models, model } = scripted();
+    const requests: string[][] = [];
+    const answer = (text: string) => (context: { messages: Message[] }) => {
+      requests.push(asked(context.messages));
+      return fauxAssistantMessage([fauxText(text)]);
+    };
+    faux.setResponses([answer("Paris."), answer("Rome.")]);
+    const geo = defineAgent({
+      name: "geo",
+      model,
+      instructions: "Answer briefly.",
+      tools: [],
+    });
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [geo],
+    });
+    try {
+      const ask = (runId: string, input: string) =>
+        runtime.run(geo, input, { conversation: "chat-1", runId, caller });
+      await expect(ask("run-1", "Capital of France?")).resolves.toBe("Paris.");
+      await expect(ask("run-2", "And of Italy?")).resolves.toBe("Rome.");
+      // A run started again gives back its own answer, not the conversation's last.
+      await expect(ask("run-1", "Capital of France?")).resolves.toBe("Paris.");
+    } finally {
+      await runtime.close();
+    }
+    expect(requests).toEqual([
+      ["Capital of France?"],
+      ["Capital of France?", "And of Italy?"],
+    ]);
+    expect(faux.state.callCount).toBe(2);
+  });
+
+  it("gives each run its own submit, and reminds a run that has not submitted, though an earlier run did", async () => {
+    const { faux, models, model } = scripted();
+    faux.setResponses([
+      fauxAssistantMessage(
+        [fauxToolCall("submit", { verdict: "raise", note: "first" })],
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage([fauxText("Fixed now.")]),
+      fauxAssistantMessage(
+        [fauxToolCall("submit", { verdict: "done", note: "second" })],
+        { stopReason: "toolUse" },
+      ),
+    ]);
+    const judge = defineAgent({
+      name: "judge",
+      model,
+      instructions: "Judge.",
+      tools: [],
+      output: verdict,
+    });
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [judge],
+    });
+    let messages: Message[] = [];
+    try {
+      const go = (runId: string) =>
+        runtime.run(judge, "Judge this.", {
+          conversation: "chat-1",
+          runId,
+          caller,
+          onMessages: (all) => (messages = all),
+        });
+      await expect(go("run-1")).resolves.toEqual({
+        verdict: "raise",
+        note: "first",
+      });
+      await expect(go("run-2")).resolves.toEqual({
+        verdict: "done",
+        note: "second",
+      });
+    } finally {
+      await runtime.close();
+    }
+    expect(asked(messages)).toEqual(["Judge this.", "Judge this.", reminder]);
+  });
+
+  it("refuses a run while another goes on, naming it, and the one going on still gives its result", async () => {
+    const { faux, models, model } = scripted();
+    let release = () => {};
+    let started = () => {};
+    const going = new Promise<void>((resolve) => (started = resolve));
+    const wait = defineTool({
+      name: "wait",
+      description: "Wait.",
+      schema: z.object({}),
+      run: () =>
+        new Promise<string>((resolve) => {
+          release = () => resolve("waited");
+          started();
+        }),
+    });
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("wait", {})], {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage([fauxText("Done.")]),
+    ]);
+    const agent = defineAgent({
+      name: "waiter",
+      model,
+      instructions: "Wait.",
+      tools: [wait],
+    });
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [agent],
+    });
+    try {
+      const first = runtime.run(agent, "Wait.", {
+        conversation: "chat-1",
+        runId: "run-1",
+        caller,
+      });
+      await going;
+      await expect(
+        runtime.run(agent, "Again.", {
+          conversation: "chat-1",
+          runId: "run-2",
+          caller,
+        }),
+      ).rejects.toThrow(
+        'conversation "chat-1": run "run-1" goes on, so run "run-2" is refused',
+      );
+      release();
+      await expect(first).resolves.toBe("Done.");
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("refuses a run that gives it another caller or context than its first run made it with", async () => {
+    const { faux, models, model } = scripted();
+    const where = defineTool({
+      name: "where",
+      description: "Say where.",
+      schema: z.object({}),
+      run: (_input, runtime: Runtime<{ root: string }>) => runtime.context.root,
+    });
+    faux.setResponses([fauxAssistantMessage([fauxText("Here.")])]);
+    const agent = defineAgent({
+      name: "where",
+      model,
+      instructions: "Say where.",
+      tools: [where],
+    });
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [agent],
+    });
+    try {
+      const go = (runId: string, who: string, root: string) =>
+        runtime.run(agent, "Where?", {
+          conversation: "chat-1",
+          runId,
+          caller: { id: who },
+          context: { root },
+        });
+      await go("run-1", "matt", "/work");
+      await expect(go("run-2", "sam", "/work")).rejects.toThrow(
+        'conversation "chat-1" acts for "matt", not "sam"',
+      );
+      await expect(go("run-2", "matt", "/other")).rejects.toThrow(
+        'conversation "chat-1" was made with another context',
+      );
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("runs each run on its own model, and a run started again keeps its own", async () => {
+    const faux = fauxProvider({ models: [{ id: "main" }, { id: "fallback" }] });
+    const models = createModels();
+    models.setProvider(faux.provider);
+    faux.setResponses([
+      fauxAssistantMessage([fauxText("Paris.")]),
+      fauxAssistantMessage([fauxText("Rome.")]),
+    ]);
+    const geo = defineAgent({
+      name: "geo",
+      model: `${faux.provider.id}:main`,
+      instructions: "Answer.",
+      tools: [],
+    });
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [geo],
+    });
+    let messages: Message[] = [];
+    try {
+      const go = (runId: string, model?: string) =>
+        runtime.run(geo, "Capital?", {
+          conversation: "chat-1",
+          runId,
+          caller,
+          ...(model ? { model } : {}),
+          onMessages: (all) => (messages = all),
+        });
+      await go("run-1");
+      await go("run-2", `${faux.provider.id}:fallback`);
+      await expect(go("run-2")).resolves.toBe("Rome.");
+    } finally {
+      await runtime.close();
+    }
+    expect(
+      messages.flatMap((m) => (m.role === "assistant" ? [m.model] : [])),
+    ).toEqual(["main", "fallback"]);
+  });
+
+  it("reports each run's own usage, and the runs' usage sums to what the conversation spent", async () => {
+    const { faux, models, model } = scripted();
+    faux.setResponses([
+      fauxAssistantMessage([
+        fauxText("Paris, the capital and largest city of France."),
+      ]),
+      fauxAssistantMessage([fauxText("Rome.")]),
+    ]);
+    const geo = defineAgent({
+      name: "geo",
+      model,
+      instructions: "Answer briefly.",
+      tools: [],
+    });
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [geo],
+    });
+    const spent: number[] = [];
+    let messages: Message[] = [];
+    try {
+      for (const [runId, input] of [
+        ["run-1", "Capital of France?"],
+        ["run-2", "And of Italy?"],
+      ] as const) {
+        await runtime.run(geo, input, {
+          conversation: "chat-1",
+          runId,
+          caller,
+          onUsage: (usage) =>
+            spent.push(
+              Object.values(usage.models).reduce((n, u) => n + u.output, 0),
+            ),
+          onMessages: (all) => (messages = all),
+        });
+      }
+    } finally {
+      await runtime.close();
+    }
+    const answered = messages.flatMap((m) =>
+      m.role === "assistant" ? [m.usage.output] : [],
+    );
+    expect(spent).toEqual(answered);
+    expect(spent[1]).toBeLessThan(spent[0] ?? 0);
+    expect(spent[1]).toBeGreaterThan(0);
   });
 });

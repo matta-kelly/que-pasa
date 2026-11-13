@@ -1,26 +1,28 @@
-import type { Resource, RunOf } from "../define/index.ts";
-import type { RunState } from "./state.ts";
+import type { ConversationOf, Resource } from "../define/index.ts";
 
-export type { RunOf };
+export type { ConversationOf };
 
-/** The host's value of one resource, per run. */
+/** The host's value of one resource, per conversation. */
 export type Provider<T = unknown> = {
   readonly resource: Resource<T>;
-  resolve(run: RunOf): T | Promise<T>;
+  resolve(conversation: ConversationOf): T | Promise<T>;
 };
 
 /**
- * The host's value of a resource for each run, resolved from the run as it was started: a run that resumes in a new
- * process gets the same one.
+ * The host's value of a resource for each conversation, resolved from the conversation as its first run made it: every
+ * run on it, also one that resumes in a new process, gets the same one.
  */
 export function provide<T>(
   resource: Resource<T>,
-  resolve: (run: RunOf) => T | Promise<T>,
+  resolve: (conversation: ConversationOf) => T | Promise<T>,
 ): Provider<T> {
   return Object.freeze({ resource, resolve });
 }
 
-/** The host's providers, and each run's resolved values: resolved once per run while it goes on in this process. */
+/**
+ * The host's providers, and each conversation's resolved values: resolved once per conversation while a run on it goes
+ * on in this process.
+ */
 export function createResources(providers: readonly Provider[]) {
   const byName = new Map<string, Provider>();
   for (const provider of providers) {
@@ -42,20 +44,20 @@ export function createResources(providers: readonly Provider[]) {
         }
       }
     },
-    /** The run's value of a resource. */
-    use<T>(run: RunState, resource: Resource<T>): Promise<T> {
+    /** The conversation's value of a resource. */
+    use<T>(of: ConversationOf, resource: Resource<T>): Promise<T> {
       const provider = byName.get(resource.name);
       if (!provider)
         throw new Error(`resource "${resource.name}" is not provided`);
       const values =
-        resolved.get(run.runId) ??
-        resolved.set(run.runId, new Map()).get(run.runId)!;
+        resolved.get(of.conversation) ??
+        resolved.set(of.conversation, new Map()).get(of.conversation)!;
       let value = values.get(resource.name);
       if (!value) {
-        const { runId, caller, context } = run;
+        const { conversation, caller, context } = of;
         value = Promise.resolve(
           provider.resolve({
-            runId,
+            conversation,
             caller,
             ...(context === undefined ? {} : { context }),
           }),
@@ -66,11 +68,11 @@ export function createResources(providers: readonly Provider[]) {
       }
       return value as Promise<T>;
     },
-    /** Drop a run's values, when it ends. */
-    forget(runId: string) {
-      resolved.delete(runId);
+    /** Drop a conversation's values, when its run ends. */
+    forget(conversation: string) {
+      resolved.delete(conversation);
     },
-    /** Drop every run's values, when the runtime closes. */
+    /** Drop every conversation's values, when the runtime closes. */
     clear() {
       resolved.clear();
     },

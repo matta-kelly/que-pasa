@@ -1,7 +1,8 @@
 /**
  * One process of a crash test (crash.test.ts): it opens a runtime on a SQLite file and runs one run, in one of two
- * phases. "first" goes until the scenario's crash point, prints CRASH_POINT and waits there to be killed. "second" opens
- * the same file, runs the same run id again, and prints its outcome as one RESULT line. The first phase runs inside a
+ * phases. "first" goes until the scenario's crash point, prints CRASH_POINT and waits there to be killed; in the
+ * second-run scenario, a first run on the same conversation ends before it. "second" opens the same file, runs the same
+ * run id again, and prints its outcome as one RESULT line. The first phase runs inside a
  * host span, as a host would, and prints its ids as one HOST line; every span is written to the spans file as it ends,
  * so the spans of a killed process are kept.
  *
@@ -42,7 +43,8 @@ type Scenario =
   | "safe-tool"
   | "resource"
   | "memory"
-  | "after-submit";
+  | "after-submit"
+  | "second-run";
 const [scenario, phase, file, log, spans] = process.argv.slice(2) as [
   Scenario,
   "first" | "second",
@@ -81,9 +83,10 @@ const crashPoint = () => {
   return new Promise<never>(() => {});
 };
 
-const faux = fauxProvider(
-  scenario === "model" && phase === "first" ? { tokensPerSecond: 2 } : {},
-);
+const faux = fauxProvider({
+  models: [{ id: "main" }, { id: "fallback" }],
+  ...(scenario === "model" && phase === "first" ? { tokensPerSecond: 2 } : {}),
+});
 const models = createModels();
 models.setProvider(faux.provider);
 const model = faux.getModel();
@@ -191,6 +194,15 @@ faux.setResponses(
           }),
         ],
         "after-submit": [submit],
+        "second-run": [
+          fauxAssistantMessage(
+            [fauxToolCall("submit", { verdict: "raise", note: "first run" })],
+            { stopReason: "toolUse" },
+          ),
+          fauxAssistantMessage([fauxToolCall("step", {})], {
+            stopReason: "toolUse",
+          }),
+        ],
       }[scenario],
 );
 
@@ -206,13 +218,19 @@ const runtime = await openRuntime({
   ],
 });
 let messages: Message[] = [];
-const go = () =>
+const go = (runId: string, model?: string) =>
   runtime.run(agent, "Go.", {
-    runId: "run-1",
+    conversation: "chat-1",
+    runId,
     caller: { id: "crash-test" },
-    context: { tag: phase },
+    // Each phase gives the context the conversation was made with, as every run on it must.
+    context: { tag: "first" },
+    ...(model ? { model } : {}),
     onMessages: (all) => (messages = all),
   });
+// The second-run scenario's run is the conversation's second, on the fallback model: the first ends before it starts.
+const runId = scenario === "second-run" ? "run-2" : "run-1";
+if (scenario === "second-run" && phase === "first") await go("run-1");
 // The host's span of the first phase never ends: its process is killed.
 const host = trace.getTracer("host").startSpan("attempt");
 if (phase === "first")
@@ -221,8 +239,15 @@ if (phase === "first")
   );
 const running =
   phase === "first"
-    ? context.with(trace.setSpan(context.active(), host), go)
-    : go();
+    ? context.with(trace.setSpan(context.active(), host), () =>
+        go(
+          runId,
+          scenario === "second-run"
+            ? `${faux.provider.id}:fallback`
+            : undefined,
+        ),
+      )
+    : go(runId);
 
 if (phase === "first") {
   if (scenario === "model") setTimeout(() => void crashPoint(), 300);
@@ -238,8 +263,11 @@ if (phase === "first") {
   const ran = readFileSync(log, { encoding: "utf8", flag: "a+" })
     .split("\n")
     .filter(Boolean);
+  const answeredBy = messages.flatMap((message) =>
+    message.role === "assistant" ? [message.model] : [],
+  );
   console.log(
-    `RESULT ${JSON.stringify({ value, calls: faux.state.callCount, ran, messages: brief, prompts })}`,
+    `RESULT ${JSON.stringify({ value, calls: faux.state.callCount, ran, messages: brief, models: answeredBy, prompts })}`,
   );
   await runtime.close();
 }

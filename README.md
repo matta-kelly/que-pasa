@@ -18,13 +18,16 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { openRuntime } from "@mku1tra/que-pasa/loop";
 
 const runtime = await openRuntime({ storage: await openNodeSqliteStorage("runs.sqlite"), models, agents: [nail] });
-const result = await runtime.run(nail, input, { runId: attempt.id, caller: { id: "assembly" }, context });
+const first = await runtime.run(nail, input, { conversation: "cl-42/coder", runId: "1", caller: { id: "assembly" }, context });
+const second = await runtime.run(nail, review, { conversation: "cl-42/coder", runId: "2", caller: { id: "assembly" }, context });
 await runtime.close();
 ```
 
+A conversation keeps its history across runs: the second run's model has the first's messages. Each run is one input to its own result, usage and trace; a conversation takes one run at a time, and every run on it gives the same agent, caller and context.
+
 One runtime per process owns its SQLite file. After a crash, open it again with the same agents: unfinished runs go on, and `run` with the same `runId` gives back the result.
 
-A tool gets what it acts on from its run, as a resource the host provides. The file and command tools of `@mku1tra/que-pasa/sandbox` act in the `Sandbox` the host gives each run:
+A tool gets what it acts on from its conversation, as a resource the host provides. The file and command tools of `@mku1tra/que-pasa/sandbox` act in the `Sandbox` the host gives each conversation:
 
 ```ts
 import { provide } from "@mku1tra/que-pasa/loop";
@@ -34,16 +37,16 @@ const coder = defineAgent({ name: "coder", model, instructions, tools: [...fileT
 const runtime = await openRuntime({
   storage, models, agents: [coder],
   resources: [
-    provide(Sandbox, ({ runId }) =>
-      podman({ name: `run-${runId}`, image: "node:22", mounts: [{ source: worktree, target: "/work" }] }),
+    provide(Sandbox, ({ conversation }) =>
+      podman({ name: `box-${conversation.replaceAll("/", "-")}`, image: "node:22", mounts: [{ source: worktree, target: "/work" }] }),
     ),
   ],
 });
 ```
 
-A provider resolves from the run as it was started, so a run that resumes after a crash gets the same sandbox. `view(backend, { read, write })` limits a run to some files. What each backend's wall stops: `sandbox/que-pasa-sandbox.md`.
+A provider resolves from the conversation as its first run made it, so every run on it, also one that resumes after a crash, gets the same sandbox. `view(backend, { read, write })` limits a conversation to some files. What each backend's wall stops: `sandbox/que-pasa-sandbox.md`.
 
-An agent's middleware are optional behaviours on its loop. `memory` gives an agent files it always has in its context, loaded once when the run is made and kept in it, so a run that resumes has the memory it started with:
+An agent's middleware are optional behaviours on its loop. `memory` gives an agent files it always has in its context, loaded once when the conversation is made and kept in it, so every run on it, also one that resumes, has the same memory:
 
 ```ts
 import { memory } from "@mku1tra/que-pasa/middleware";

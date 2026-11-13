@@ -1,11 +1,15 @@
-/** The person or program a run acts for. Every run carries one: no tool or agent passes it on. */
+/** The person or program a conversation acts for. Every run gives one: no tool or agent passes it on. */
 export type Caller = { id: string };
 
-/** A run as it was started, read from its run document: what a resource and a middleware's `beforeAgent` get. */
-export type RunOf = {
-  runId: string;
+/**
+ * A conversation as its first run made it, read from its document: what a resource and a middleware's `beforeAgent`
+ * get. Every run on it gives the same caller and context.
+ */
+export type ConversationOf = {
+  /** The host's key for the conversation. */
+  conversation: string;
   caller: Caller;
-  /** Absent when the run was given none. */
+  /** Absent when it was given none. */
   context?: Json;
 };
 
@@ -16,13 +20,14 @@ export type Json =
   string | number | boolean | null | Json[] | { [key: string]: Json };
 
 /**
- * What a tool gets from its run, besides its input: the caller, the context the run was given (LangChain's runtime
- * context), and the resources the host provides for the run. The context is JSON, because the run keeps it, and a run
- * that resumes after a restart gives its tools the same one, so they get the same resources.
+ * What a tool gets from its run, besides its input: the caller, the context its conversation was given (LangChain's
+ * runtime context), and the resources the host provides for the conversation. The context is JSON, because the
+ * conversation keeps it, and a run that resumes after a restart gives its tools the same one, so they get the same
+ * resources.
  */
 export type Runtime<C extends Json | undefined = undefined> = {
   caller: Caller;
   context: C;
-  /** The run's value of a resource the tool declares in `uses`. Any other resource throws. */
+  /** The conversation's value of a resource the tool declares in `uses`. Any other resource throws. */
   use<T>(resource: Resource<T>): Promise<T>;
 };

@@ -84,7 +84,11 @@ async function traced(
   });
   const go = () =>
     runtime
-      .run(agent, "How many A1?", { runId: "run-1", caller })
+      .run(agent, "How many A1?", {
+        conversation: "chat-1",
+        runId: "run-1",
+        caller,
+      })
       .catch((error: unknown) => error);
   try {
     const outcome = host
@@ -138,7 +142,8 @@ describe("a run's trace", () => {
     expect(run.attributes).toMatchObject({
       "gen_ai.operation.name": "invoke_agent",
       "gen_ai.agent.name": "stock",
-      "gen_ai.conversation.id": "run-1",
+      "gen_ai.conversation.id": "chat-1",
+      "que_pasa.run.id": "run-1",
       "gen_ai.provider.name": provider,
       "gen_ai.request.model": modelId,
       "enduser.id": "matt",
@@ -258,7 +263,11 @@ describe("a run's trace", () => {
       agents: [agent],
     });
     try {
-      await runtime.run(agent, "Go", { runId: "run-1", caller });
+      await runtime.run(agent, "Go", {
+        conversation: "chat-1",
+        runId: "run-1",
+        caller,
+      });
     } finally {
       await runtime.close();
     }
@@ -283,6 +292,65 @@ describe("a run's trace", () => {
     expect(
       run.events.filter((event) => event.name === "que_pasa.reminder"),
     ).toHaveLength(2);
+  });
+
+  it("is one trace per run of a conversation, each tagged with the conversation and the run, with the run's own usage and content", async () => {
+    const { faux, models, model } = scripted();
+    faux.setResponses([
+      fauxAssistantMessage([
+        fauxText("Paris, the capital and largest city of France."),
+      ]),
+      fauxAssistantMessage([fauxText("Rome.")]),
+    ]);
+    const agent = defineAgent({
+      name: "geo",
+      model,
+      instructions: "Answer.",
+      tools: [],
+    });
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [agent],
+      captureContent: true,
+    });
+    try {
+      await runtime.run(agent, "Capital of France?", {
+        conversation: "chat-1",
+        runId: "run-1",
+        caller,
+      });
+      await runtime.run(agent, "And of Italy?", {
+        conversation: "chat-1",
+        runId: "run-2",
+        caller,
+      });
+    } finally {
+      await runtime.close();
+    }
+    const [first, second] = named(exporter.getFinishedSpans(), "invoke_agent");
+    expect(first?.attributes).toMatchObject({
+      "gen_ai.conversation.id": "chat-1",
+      "que_pasa.run.id": "run-1",
+    });
+    expect(second?.attributes).toMatchObject({
+      "gen_ai.conversation.id": "chat-1",
+      "que_pasa.run.id": "run-2",
+    });
+    expect(first?.spanContext().traceId).not.toBe(
+      second?.spanContext().traceId,
+    );
+    const output = (span: ReadableSpan | undefined) =>
+      span?.attributes["gen_ai.usage.output_tokens"] as number;
+    expect(output(second)).toBeGreaterThan(0);
+    expect(output(second)).toBeLessThan(output(first));
+    expect(second?.attributes["gen_ai.input.messages"]).toContain(
+      "And of Italy?",
+    );
+    expect(second?.attributes["gen_ai.input.messages"]).not.toContain(
+      "Capital of France?",
+    );
+    expect(second?.attributes["gen_ai.output.messages"]).toContain("Rome.");
   });
 
   it("gives an agent one version on one model, and another when what it is changes", () => {

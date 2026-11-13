@@ -1,9 +1,9 @@
 declare const valueType: unique symbol;
 
 /**
- * Something a tool needs that the host gives each run: a sandbox, and later a connection. It holds no value, only its
- * name and the type of its value: the host provides the value per run (`openRuntime({ resources })`), and a tool asks
- * for it with `runtime.use(resource)`.
+ * Something a tool needs that the host gives each conversation: a sandbox, and later a connection. It holds no value,
+ * only its name and the type of its value: the host provides the value per conversation (`openRuntime({ resources })`),
+ * and a tool asks for it with `runtime.use(resource)`.
  */
 export type Resource<T = unknown> = {
   /** kebab-case: the host provides it by this name. */

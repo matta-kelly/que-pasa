@@ -6,7 +6,7 @@ import type { Middleware } from "../define/index.ts";
 import { type FileBackend, local } from "../sandbox/index.ts";
 import { memory, memoryPrompt } from "./index.ts";
 
-const run = { runId: "run-1", caller: { id: "matt" } };
+const made = { conversation: "chat-1", caller: { id: "matt" } };
 
 let host = "";
 let backend: FileBackend;
@@ -23,10 +23,10 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(host, { recursive: true, force: true }));
 
-/** What a memory adds to the system prompt for a run, as the loop does it: load once, then render from what was kept. */
+/** What a memory adds to the system prompt, as the loop does it: load once per conversation, then render from what was kept. */
 async function promptOf(middleware: Middleware) {
-  const kept = await middleware.beforeAgent!(run);
-  // The run keeps it as JSON in storage.
+  const kept = await middleware.beforeAgent!(made);
+  // The conversation keeps it as JSON in storage.
   return middleware.systemPrompt!(JSON.parse(JSON.stringify(kept)));
 }
 
@@ -69,17 +69,17 @@ describe("memory", () => {
 
   it("fails the load on any other error, such as a folder or a path outside the backend", async () => {
     await expect(
-      memory({ backend, sources: ["memory"] }).beforeAgent!(run),
+      memory({ backend, sources: ["memory"] }).beforeAgent!(made),
     ).rejects.toThrow(/memory: memory: is_directory/);
     await expect(
-      memory({ backend, sources: ["../x"] }).beforeAgent!(run),
+      memory({ backend, sources: ["../x"] }).beforeAgent!(made),
     ).rejects.toThrow(/invalid_path/);
   });
 
   it("fails the load on a source that is not UTF-8 text", async () => {
     writeFileSync(join(host, "memory/bin"), Uint8Array.from([0xff, 0xfe]));
     await expect(
-      memory({ backend, sources: ["memory/bin"] }).beforeAgent!(run),
+      memory({ backend, sources: ["memory/bin"] }).beforeAgent!(made),
     ).rejects.toThrow();
   });
 

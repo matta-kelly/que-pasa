@@ -17,7 +17,7 @@ import {
   type Failed,
 } from "./backend.ts";
 
-/** The backend a run's file tools work in: the host provides it per run, such as a container, or a view over one. */
+/** The backend a conversation's file tools work in: the host provides it per conversation, such as a container, or a view over one. */
 export const Sandbox = defineResource<FileBackend>("sandbox");
 
 type Any = Runtime<Json | undefined>;

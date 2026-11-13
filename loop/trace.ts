@@ -2,14 +2,15 @@
  * A run's trace: OpenTelemetry spans in the GenAI conventions (semconv 1.43.0), made live from pi's hooks, through the
  * OpenTelemetry API only. The host owns the SDK and the exporter; with none, every call here is a no-op.
  *
- *   invoke_agent <agent>     one per process that works on the run: a segment
+ *   invoke_agent <agent>     one per run, per process that works on it: a segment
  *   ├─ chat <model>          one per model request
  *   ├─ execute_tool <tool>   one per tool call, submit included
  *   └─ que_pasa.reminder     an event per reminder the run sent
  *
- * A segment's parent is the trace parent its run document keeps: the host's span when the run was started in one, or
- * else the run's first segment. So every segment of a run, also one that resumes after a crash in a new process, is in
- * one trace. Message content is recorded only when the host asks for it.
+ * A conversation's runs are its own traces, one each, tagged with the conversation's key. A segment's parent is the trace
+ * parent its run's document keeps: the host's span when the run was started in one, or else the run's first segment. So
+ * every segment of a run, also one that resumes after a crash in a new process, is in one trace. Message content is
+ * recorded only when the host asks for it.
  */
 
 import { createHash } from "node:crypto";
@@ -32,7 +33,6 @@ import {
   type Harness,
   hook,
   ToolTask,
-  UsageDoc,
 } from "@earendil-works/pi-durable";
 import {
   type Attributes,
@@ -82,12 +82,15 @@ import {
   submitTool,
 } from "./extension.ts";
 import {
+  ConversationDoc,
+  type ConversationState,
   MiddlewareDoc,
   RunDoc,
   type RunState,
   type TraceParent,
 } from "./state.ts";
-import { messagesOf, resultOf } from "./transcript.ts";
+import { type Outcome, outcomeOf } from "./transcript.ts";
+import { usageOf } from "./usage.ts";
 
 /** The trace extension's name: every run's conversation selects it, after its agent's. */
 export const traceExtensionName = "que-pasa.trace";
@@ -103,6 +106,8 @@ export function activeParent(): TraceParent | undefined {
 /** A segment: this process's invoke_agent span of one run, and its open model and tool spans. */
 type Segment = {
   span: Span;
+  /** The run's model, "provider:model-id". */
+  model: string;
   chat?: Span;
   tools: Map<string, Span>;
   ended: boolean;
@@ -119,31 +124,42 @@ export function createTracing({
   captureContent: boolean;
 }) {
   let harness: Harness | undefined;
-  /** The runs this process started: a segment of any other run is a resumed one. */
-  const started = new Set<ConversationId>();
-  const segments = new Map<ConversationId, Promise<Segment | undefined>>();
+  /** The runs this process admitted: a segment of any other run is a resumed one. */
+  const started = new Set<string>();
+  const segments = new Map<string, Promise<Segment | undefined>>();
+  const keyOf = (id: ConversationId, runId: string) =>
+    JSON.stringify([id, runId]);
 
-  /** The run's segment in this process, opened on first use. Undefined for a conversation that is no run's. */
-  function segmentOf(
+  /**
+   * The segment in this process of the conversation's run going on, its last, opened on first use. Undefined for a
+   * conversation that is no agent's.
+   */
+  async function segmentOf(
     id: ConversationId,
     reader: DocumentReader,
     context: Context,
   ) {
-    let segment = segments.get(id);
+    const kept = await reader.snapshot(ConversationDoc, id, context);
+    const runId = kept?.runs.at(-1);
+    if (!kept || runId === undefined) return undefined;
+    const key = keyOf(id, runId);
+    let segment = segments.get(key);
     if (!segment) {
-      segment = open(id, reader, context);
-      segments.set(id, segment);
+      segment = open(id, kept, runId, reader, context);
+      segments.set(key, segment);
     }
     return segment;
   }
 
   async function open(
     id: ConversationId,
+    kept: ConversationState,
+    runId: string,
     reader: DocumentReader,
     context: Context,
   ): Promise<Segment | undefined> {
-    const run = await reader.snapshot(RunDoc, id, context);
-    const agent = run && agents.get(run.agent);
+    const run = await reader.snapshot(RunDoc, id, runId, context);
+    const agent = agents.get(kept.agent);
     if (!run || !agent || !harness) return undefined;
     const parent = run.trace
       ? trace.setSpanContext(ROOT_CONTEXT, { ...run.trace, isRemote: true })
@@ -154,21 +170,30 @@ export function createTracing({
         kind: SpanKind.INTERNAL,
         attributes: runAttributes(
           agent,
+          kept,
+          runId,
           run,
-          !started.has(id),
+          !started.has(keyOf(id, runId)),
           captureContent ? await systemOf(agent, id, reader, context) : [],
         ),
       },
       parent,
     );
-    const segment: Segment = { span, tools: new Map(), ended: false };
+    const segment: Segment = {
+      span,
+      model: run.model,
+      tools: new Map(),
+      ended: false,
+    };
     // The run's first segment is the parent of the ones after it, when the run has no host span to keep.
     if (!run.trace && trace.isSpanContextValid(span.spanContext())) {
       await harness.commit(async (tx) => {
-        (await tx.doc(RunDoc, id)).trace = parentOf(span.spanContext());
+        (await tx.doc(RunDoc, id, runId, null)).trace = parentOf(
+          span.spanContext(),
+        );
       }, BACKGROUND_CONTEXT);
     }
-    segment.done = endWhenSettled(harness, id, run.runId, agent, segment);
+    segment.done = endWhenSettled(harness, id, runId, agent, segment);
     return segment;
   }
 
@@ -193,9 +218,14 @@ export function createTracing({
       const settled = await submission?.wait(BACKGROUND_CONTEXT);
       const conversation = await on.conversation(id, BACKGROUND_CONTEXT);
       if (!settled || !conversation || segment.ended) return;
-      const messages = await messagesOf(conversation, BACKGROUND_CONTEXT);
+      const outcome = await outcomeOf(
+        conversation,
+        settled,
+        submitTool,
+        BACKGROUND_CONTEXT,
+      );
       const spent = Object.values(
-        (await on.snapshot(UsageDoc, id, BACKGROUND_CONTEXT))?.models ?? {},
+        (await usageOf(on, id, runId, BACKGROUND_CONTEXT)).models,
       );
       const total = (count: (usage: (typeof spent)[number]) => number) =>
         spent.reduce((sum, usage) => sum + count(usage), 0);
@@ -205,12 +235,12 @@ export function createTracing({
         ),
         [ATTR_GEN_AI_USAGE_OUTPUT_TOKENS]: total((u) => u.output),
         [ATTR_GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS]: total((u) => u.cacheRead),
-        ...(captureContent ? runContent(messages) : {}),
+        ...(captureContent ? runContent(outcome) : {}),
       });
       const failure =
         settled.status !== "done"
           ? settled.reason
-          : agent.output && !resultOf(messages, submitTool)
+          : agent.output && !outcome.submitted
             ? "no_submit"
             : undefined;
       end(segment, failure);
@@ -244,8 +274,7 @@ export function createTracing({
             const last = request.messages.at(-1);
             if (last?.role === "user" && textOf(last.content) === reminder)
               segment.span.addEvent("que_pasa.reminder");
-            const run = await api.snapshot(RunDoc, api.conversationId, context);
-            const model = parseModel(run?.model ?? "");
+            const model = parseModel(segment.model);
             segment.chat = tracer.startSpan(
               `${GEN_AI_OPERATION_NAME_VALUE_CHAT} ${model.modelId}`,
               {
@@ -321,14 +350,14 @@ export function createTracing({
     bind(on: Harness) {
       harness = on;
     },
-    /** A run this process started, so its first segment is not a resumed one. */
-    start(id: ConversationId) {
-      started.add(id);
+    /** A run this process admitted, so its first segment is not a resumed one. */
+    start(id: ConversationId, runId: string) {
+      started.add(keyOf(id, runId));
     },
     /** Settles when the run's segment in this process, if it has one, has ended. */
-    async ended(id: ConversationId) {
+    async ended(id: ConversationId, runId: string) {
       await (
-        await segments.get(id)
+        await segments.get(keyOf(id, runId))
       )?.done;
     },
     /** End every open segment: the runs are kept, and go on in the next process, in a segment of their own. */
@@ -348,6 +377,8 @@ export function createTracing({
 /** The attributes of a run's invoke_agent span: what the run is, and, opted in, what its agent was given. */
 function runAttributes(
   agent: AnyAgent,
+  conversation: ConversationState,
+  runId: string,
   run: RunState,
   resumed: boolean,
   system: readonly string[],
@@ -358,10 +389,11 @@ function runAttributes(
     [ATTR_GEN_AI_OPERATION_NAME]: GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT,
     [ATTR_GEN_AI_AGENT_NAME]: agent.name,
     [ATTR_GEN_AI_AGENT_VERSION]: versionOf(agent, run.model),
-    [ATTR_GEN_AI_CONVERSATION_ID]: run.runId,
+    [ATTR_GEN_AI_CONVERSATION_ID]: conversation.conversation,
+    "que_pasa.run.id": runId,
     [ATTR_GEN_AI_PROVIDER_NAME]: model.provider,
     [ATTR_GEN_AI_REQUEST_MODEL]: model.modelId,
-    [ATTR_ENDUSER_ID]: run.caller.id,
+    [ATTR_ENDUSER_ID]: conversation.caller.id,
     "que_pasa.resumed": resumed,
     ...(system.length > 0
       ? {
@@ -433,10 +465,8 @@ export function versionOf(agent: AnyAgent, model: string): string {
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }
 
-/** A run's input and output, opted in: its first user message, and its submit's arguments or its last answer. */
-function runContent(messages: readonly Message[]): Attributes {
-  const input = messages.find((message) => message.role === "user");
-  const output = messages.findLast((message) => message.role === "assistant");
+/** A run's input and output, opted in: its input, and its answer (with its submit call, for an agent with an output). */
+function runContent({ input, answer: output }: Outcome): Attributes {
   return {
     ...(input ? { [ATTR_GEN_AI_INPUT_MESSAGES]: json([toGenAi(input)]) } : {}),
     ...(output

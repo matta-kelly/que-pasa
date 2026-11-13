@@ -30,12 +30,12 @@ A tool is a name, a description, the input it takes and what it does; it gets wh
 
 ## Reaching an outside system
 
-A tool reaches what it acts on through a resource, which the host gives each run; the tool never holds it.
-- resource (`defineResource`): something a tool needs that the host gives each run, such as a sandbox ([[que-pasa-sandbox]]), or a login
+A tool reaches what it acts on through a resource, which the host gives each conversation; the tool never holds it.
+- resource (`defineResource`): something a tool needs that the host gives each conversation, such as a sandbox ([[que-pasa-sandbox]]), or a login
 	- a tool names the resources it uses in `uses`, and asks for one with `runtime.use(resource)`; any other throws
-	- the host provides each one when it opens the runtime: `provide(resource, (run) => value)`, from the run's id, caller and context. A tool that uses one the host does not provide fails the runtime's open, never a run
-	- the value is resolved once per run in a process, from the run as it was started: a run that resumes in a new process gets the same one
-- a connection is a resource that holds a login: the run's caller's, or the agent's own. A tool never holds a credential, and none enters the model's context. Not built: no connection resolves a login yet
+	- the host provides each one when it opens the runtime: `provide(resource, (conversation) => value)`, from the conversation's key, caller and context. A tool that uses one the host does not provide fails the runtime's open, never a run
+	- the value is resolved once per run in a process, from the conversation as its first run made it: every run on it, also one that resumes in a new process, gets the same one
+- a connection is a resource that holds a login: the conversation's caller's, or the agent's own. A tool never holds a credential, and none enters the model's context. Not built: no connection resolves a login yet
 - permissions are held at the tool and at the target system, never trusted to the agent
 	- hiding a tool keeps an agent on task; the login, or the sandbox's wall, keeps it safe
 
