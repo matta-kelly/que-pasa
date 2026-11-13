@@ -12,6 +12,7 @@ An agent in motion: a conversation of one agent and one caller, and its runs, ea
 - [[#What it leaves]] its result, usage, conversation and trace
 
 - [[que-pasa]]: the harness it is part of
+- [[decision-model]]: gates, routes and verifiers in the loop as decision model calls. Not built
 
 ---
 ## The idea
@@ -66,6 +67,7 @@ A run moves from admitted to settled, through model calls and tool calls; pi mov
 - settled, as: answered (text), submitted (the output), or failed: `no_submit` after two reminders, or pi's reason (`aborted`, `model_error`, `restart_limit` and the others)
 - a conversation's next run: admitted once the run before it has settled, and generating with the whole history
 - middleware ([[que-pasa-middleware]]): `beforeAgent` runs once before the conversation is made, and `systemPrompt` before each request in generating. Middleware between generating and tooling (approval, summarize, limits): not built
+	- a gate, a route or a verifier in it can be a decision model call: a decision model picks one option from a fixed set, after a check that its answers stay the same when the order of the choices changes or the input is given again. Not built
 
 ## Invariants
 
