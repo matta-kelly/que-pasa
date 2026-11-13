@@ -1,3 +1,4 @@
+export { type RefusedReason, RunFailed, RunRefused } from "./errors.ts";
 export { reminder, submitTool } from "./extension.ts";
 export { type ConversationOf, provide, type Provider } from "./resources.ts";
 export {

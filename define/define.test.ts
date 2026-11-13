@@ -88,6 +88,14 @@ describe("defineAgent", () => {
     expect(agent.output).toBeUndefined();
   });
 
+  it("keeps its description, and refuses an empty one", () => {
+    const described = { ...salesRep, description: "Sells products." };
+    expect(defineAgent(described).description).toBe("Sells products.");
+    expect(() => defineAgent({ ...salesRep, description: " " })).toThrow(
+      "the description is empty",
+    );
+  });
+
   it("keeps the output schema", () => {
     const output = z.object({ verdict: z.enum(["done", "raise"]) });
     expect(defineAgent({ ...salesRep, output }).output).toBe(output);

@@ -10,6 +10,8 @@ export type Agent<
 > = {
   /** kebab-case, as its file is named. */
   name: string;
+  /** What it does, for whoever picks it: a person in a list of agents, or a client that offers it as a tool. */
+  description?: string;
   /** "provider:model-id". */
   model: string;
   /** What the agent is and how it works: its system prompt, after its middleware's sections. */
@@ -51,6 +53,9 @@ export function defineAgent<
   }
   if (agent.instructions.trim() === "") {
     throw new Error(`agent "${agent.name}": the instructions are empty`);
+  }
+  if (agent.description?.trim() === "") {
+    throw new Error(`agent "${agent.name}": the description is empty`);
   }
   const seen = new Set<string>();
   for (const tool of agent.tools) {

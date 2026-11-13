@@ -24,6 +24,7 @@ import {
   type Json,
   parseModel,
 } from "../define/index.ts";
+import { RunFailed, RunRefused } from "./errors.ts";
 import { type AnyAgent, agentExtension, submitTool } from "./extension.ts";
 import { createResources, type Provider } from "./resources.ts";
 import {
@@ -83,6 +84,11 @@ export type RunOptions<C extends Json | undefined> = {
   model?: string;
   /** Stops the run: run() rejects with the signal's reason, and no tool or model call starts after it. */
   signal?: AbortSignal;
+  /**
+   * Called once the run is admitted, or found admitted already: after this, run() gives its result or `RunFailed`,
+   * never `RunRefused`. A host that answers a caller before the result, such as the server, waits for it.
+   */
+  onStarted?: () => void;
   /** Called once when the run ends, answered or not, with what it spent. */
   onUsage?: (usage: RunUsage) => void;
   /**
@@ -223,7 +229,8 @@ export async function openRuntime({
       } catch (error) {
         if (!(error instanceof ConversationBusy)) throw error;
         const going = (await tx.doc(ConversationDoc, id)).runs.at(-1);
-        throw new Error(
+        throw new RunRefused(
+          "busy",
           `conversation "${key}": run "${going}" goes on, so run "${runId}" is refused`,
           { cause: error },
         );
@@ -264,6 +271,7 @@ export async function openRuntime({
       runId,
       caller,
       signal,
+      onStarted,
       onUsage,
       onMessages,
     } = options;
@@ -280,10 +288,12 @@ export async function openRuntime({
       model,
       ...(parent === undefined ? {} : { trace: parent }),
     });
+    onStarted?.();
     try {
       const settled = await waitFor(submission, conversation, signal);
       if (settled.status !== "done") {
-        throw new Error(
+        throw new RunFailed(
+          settled.reason,
           `agent "${agent.name}": the run ended with no answer (${settled.reason})`,
         );
       }
@@ -298,7 +308,8 @@ export async function openRuntime({
           outcome.answer ? answerText(outcome.answer) : ""
         ) as RunResult<O>;
       if (!outcome.submitted)
-        throw new Error(
+        throw new RunFailed(
+          "no_submit",
           `agent "${agent.name}": the run ended with no ${submitTool}`,
         );
       return outcome.submitted.value as RunResult<O>;
@@ -325,17 +336,20 @@ export async function openRuntime({
 function refuseOther(kept: ConversationState, given: Made) {
   const key = given.conversation;
   if (kept.agent !== given.agent) {
-    throw new Error(
+    throw new RunRefused(
+      "other_agent",
       `conversation "${key}" is of agent "${kept.agent}", not "${given.agent}"`,
     );
   }
   if (kept.caller.id !== given.caller.id) {
-    throw new Error(
+    throw new RunRefused(
+      "other_caller",
       `conversation "${key}" acts for "${kept.caller.id}", not "${given.caller.id}"`,
     );
   }
   if (!isDeepStrictEqual(kept.context, given.context)) {
-    throw new Error(
+    throw new RunRefused(
+      "other_context",
       `conversation "${key}" was made with another context: its runs give the one it was made with`,
     );
   }

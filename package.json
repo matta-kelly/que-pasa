@@ -28,6 +28,10 @@
     "./sandbox": {
       "types": "./dist/sandbox/index.d.ts",
       "default": "./dist/sandbox/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "default": "./dist/server/index.js"
     }
   },
   "files": [
@@ -44,7 +48,8 @@
     "@earendil-works/pi-ai": "1.5.0",
     "@earendil-works/pi-durable": "1.5.0",
     "@opentelemetry/api": "1.10.0",
-    "@opentelemetry/semantic-conventions": "1.43.0"
+    "@opentelemetry/semantic-conventions": "1.43.0",
+    "hono": "4.13.18"
   },
   "peerDependencies": {
     "zod": "^4.6.0"

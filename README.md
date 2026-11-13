@@ -62,6 +62,25 @@ What middleware is, and how memory works: `middleware/que-pasa-middleware.md`.
 
 Each run is traced as OpenTelemetry GenAI spans through `@opentelemetry/api`. To keep them, register an SDK (a tracer provider, an exporter, and an async context manager). To add what only the host knows, call `runtime.run()` inside a span of its own. `captureContent: true` on `openRuntime` adds message content.
 
+## Serve agents
+
+`@mku1tra/que-pasa/server` reaches a deployment's agents from outside its process. The deployment opens the runtime and answers who is calling, which agents they get, and what context a conversation has:
+
+```ts
+import { serve } from "@hono/node-server";
+import { createServer } from "@mku1tra/que-pasa/server";
+
+const server = createServer({
+  runtime,
+  authenticate: async (request) => callerFromLogin(request), // undefined refuses (401)
+  agentsFor: (caller) => agentsOf(caller),
+  contextFor: ({ caller, agent, conversation }) => undefined, // optional
+});
+serve({ fetch: server.fetch, port: 8080 });
+```
+
+It answers `GET /ok`, `GET /agents`, and `POST /conversations/{conversation}/runs/wait` with `{ agent, runId, input }`, after LangGraph's Agent Server. A way in in the same process, such as an MCP layer, calls `server.agents(request)` and `server.run(request, agent, { conversation, runId, input })`. The routes, the refusals and a long run: `server/que-pasa-server.md`.
+
 ## Use it from another project
 
 Install it from npm: `npm install @mku1tra/que-pasa zod`. zod is a peer dependency: the project brings it.

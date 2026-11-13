@@ -21,6 +21,8 @@ import type { Json, Agent } from "../define/index.ts";
 import {
   openRuntime,
   provide,
+  RunFailed,
+  RunRefused,
   type RunOptions,
   type RunUsage,
 } from "./index.ts";
@@ -1403,5 +1405,97 @@ describe("a conversation", () => {
     expect(spent).toEqual(answered);
     expect(spent[1]).toBeLessThan(spent[0] ?? 0);
     expect(spent[1]).toBeGreaterThan(0);
+  });
+});
+
+describe("a run's end", () => {
+  it("calls onStarted once it is admitted, before its result, and again for the run started again", async () => {
+    const { faux, models, model } = scripted();
+    faux.setResponses([fauxAssistantMessage([fauxText("Paris.")])]);
+    const geo = defineAgent({
+      name: "geo",
+      model,
+      instructions: "Answer.",
+      tools: [],
+    });
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [geo],
+    });
+    const seen: string[] = [];
+    try {
+      for (let i = 0; i < 2; i++) {
+        seen.push(
+          await runtime.run(geo, "Capital?", {
+            conversation: "c",
+            runId: "1",
+            caller,
+            onStarted: () => seen.push("started"),
+          }),
+        );
+      }
+    } finally {
+      await runtime.close();
+    }
+    expect(seen).toEqual(["started", "Paris.", "started", "Paris."]);
+  });
+
+  it("refuses with RunRefused and its reason, never calling onStarted", async () => {
+    const { faux, models, model } = scripted();
+    faux.setResponses([fauxAssistantMessage([fauxText("Paris.")])]);
+    const geo = defineAgent({
+      name: "geo",
+      model,
+      instructions: "Answer.",
+      tools: [],
+    });
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [geo],
+    });
+    let started = 0;
+    try {
+      await runtime.run(geo, "Capital?", {
+        conversation: "c",
+        runId: "1",
+        caller,
+      });
+      const refused = await runtime
+        .run(geo, "Again?", {
+          conversation: "c",
+          runId: "2",
+          caller: { id: "sam" },
+          onStarted: () => (started += 1),
+        })
+        .catch((error: unknown) => error);
+      expect(refused).toBeInstanceOf(RunRefused);
+      expect((refused as RunRefused).reason).toBe("other_caller");
+    } finally {
+      await runtime.close();
+    }
+    expect(started).toBe(0);
+  });
+
+  it("fails with RunFailed and its reason, after it started", async () => {
+    const { faux, models, model } = scripted();
+    faux.setResponses([
+      fauxAssistantMessage([fauxText("Done.")]),
+      fauxAssistantMessage([fauxText("Done.")]),
+      fauxAssistantMessage([fauxText("Done.")]),
+    ]);
+    const judge = defineAgent({
+      name: "judge",
+      model,
+      instructions: "Judge.",
+      tools: [],
+      output: verdict,
+    });
+    const failed = await once(judge, "Judge this.", { caller, models }).catch(
+      (error: unknown) => error,
+    );
+    expect(failed).toBeInstanceOf(RunFailed);
+    expect((failed as RunFailed).reason).toBe("no_submit");
   });
 });

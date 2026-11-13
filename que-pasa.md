@@ -71,18 +71,20 @@ What is written in a workspace's own repo, with que-pasa's `define`: its agents,
 
 How a workspace's agents are reached: a process that runs them.
 - today a host wires `loop/` itself: storage, models, its agents, the resources their tools use (such as each conversation's sandbox), the OTel SDK, and starting again the runs a restart left. Assembly is one
+- server ([[que-pasa-server]]): a host that starts runs for callers outside its process, after LangGraph's Agent Server. It asks the deployment who is calling, which agents they get and what context a conversation has, then runs the agent. Its HTTP API lists the caller's agents and runs an input on a conversation; its operations serve a way in in the same process. L&L is its first deployment
 - a standard host, which does that wiring by convention for any workspace: not built
 	- storage in the deployment's data folder, and models from env
 	- traces: it starts the OpenTelemetry SDK, which reads OTel's own `OTEL_*` variables, so a deployment points its traces at Langfuse, a collector or any backend with no code. With none set, OTLP JSON files in a known folder of the data folder: the one part que-pasa writes
 	- starting again, on start, the runs a restart left
 	- invocation: run one agent of the workspace on an input, or a next run on a conversation, so a person, or a simulated user in an eval, can drive several turns
-- delivery: how a person reaches their agents, on the host: chat, MCP. One agent definition serves every delivery, and a delivery changes nothing in it: an agent holds nothing about how it is reached. Not built
+- delivery: how a person reaches their agents, on the host: chat, MCP, a phone. One agent definition serves every delivery, and a delivery changes nothing in it: an agent holds nothing about how it is reached. Each delivery is its deployment's, on the server: L&L's MCP layer is one
 
 ## Seams
 
 What crosses between que-pasa and the outside.
-- a workspace's repo, and a host, import `@mku1tra/que-pasa/define`, `/loop`, `/middleware` and `/sandbox`, by its published version on npm. zod is a peer
+- a workspace's repo, and a host, import `@mku1tra/que-pasa/define`, `/loop`, `/middleware`, `/sandbox` and `/server`, by its published version on npm. zod is a peer
 - a host gives storage, models, agents and resources, and gets results, usage and conversations
+- a server ([[que-pasa-server]]): que-pasa ships the routes, the checks and the run; the deployment answers who is calling, which agents they get and what context a conversation has, from its own control plane, and serves it on its box
 - a sandbox ([[que-pasa-sandbox]]): que-pasa ships the backends, the view and the tools; the host gives each conversation its backend, and sets the policy: image, mounts, network, read-only, view
 - spans go out through `@opentelemetry/api` only. The host owns the SDK and where spans go; it records what only it knows on its own span and calls `run()` inside it. Every segment of a run, also after a crash, is in that trace
 - evals (eval2): que-pasa gives them traces and runs; grading is theirs

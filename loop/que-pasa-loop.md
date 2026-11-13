@@ -107,6 +107,9 @@ One runtime per process owns its storage: `openRuntime({ storage, models, agents
 
 A run gives back its result, its usage, its conversation and its trace.
 - its result: the output its submit gave, or its answer as text. `signal` stops a run: the conversation is aborted, and `run` rejects with the signal's reason
+	- a refusal before the run is admitted: `RunRefused`, with its reason: `other_agent`, `other_caller`, `other_context` or `busy`. Nothing of the run is kept
+	- `onStarted`: called once the run is admitted, or found admitted; after it, `run` gives the result or `RunFailed`, never `RunRefused`. The server waits for it to answer 200 ([[que-pasa-server]])
+	- a run that ended with no result: `RunFailed`, with pi's reason, or `no_submit`
 - its usage: `onUsage`, once, answered or not: what the run spent, tokens and cost per `provider/model-id`, and per tool
 - its conversation: `onMessages`, once, answered or not, as pi-ai's messages in order, up to the run's end: every run's input, each assistant message with its tool calls, each tool result, the reminders and the submits. Not the system prompt
 - its trace (`loop/trace.ts`): OpenTelemetry spans in the GenAI conventions (semconv 1.43.0), made live from pi's hooks, through `@opentelemetry/api` only
