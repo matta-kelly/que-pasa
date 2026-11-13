@@ -7,7 +7,7 @@
 #   scripts/check.sh --plan   print the sets the change needs, and run none
 #
 # The three parts below are que-pasa's. The rest is the template's (shit-sdlc, templates/repo).
-# Runs where Node is: in the dev container, or in a pipeline job.
+# Runs where Node is: in the workspace (crate run), or in the check of a push on the server.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -24,7 +24,7 @@ set_code() {
   npx tsc --noEmit &&
     npx eslint &&
     npx prettier --check . &&
-    scripts/dev-image.test.sh &&
+    scripts/workflows.test.sh &&
     npx vitest run --reporter="$reporter" &&
     npm run --silent build &&
     scripts/package.test.sh

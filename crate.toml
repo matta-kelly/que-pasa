@@ -1,4 +1,13 @@
-# crate (github.com/matta-kelly/crate) checks every push to main on the server, in this image.
-crate = "1"
-image = "dev"
-ship = "npm"
+# que-pasa's workspace and its check, made by crate (github.com/matta-kelly/crate) from this file: on the laptop
+# (just up), in the factory, and in the check of every push to main on the server.
+crate = "2"
+name = "que-pasa"
+image = "dev"     # the check runs in the dev image, [dev] below
+ship = "npm"      # each move of main publishes the versions its commits ask for
+
+[dev]             # the dev image: the files its hash covers
+inputs = [".devcontainer/Containerfile", "package-lock.json"]
+
+[tools]           # the dev image with the checkout: where commands run
+volumes = ["node_modules"]
+setup = "npm ci"

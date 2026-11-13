@@ -1,5 +1,5 @@
 # que-pasa's dev image: Node 22 and the npm cache of its lockfile. No node_modules and no build output:
-# each checkout installs into its own volume from this cache (devcontainer.json's postCreateCommand).
+# each checkout installs into its own volume from this cache (crate.toml's [tools] setup).
 # Built from the repo's root.
 FROM mcr.microsoft.com/devcontainers/javascript-node:22 AS base
 ENV npm_config_cache=/opt/npm-cache \
