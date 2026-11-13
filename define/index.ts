@@ -4,6 +4,7 @@ export {
   type ConnectionOwner,
   defineConnection,
   isConnection,
+  type ServiceIdentity,
 } from "./connection.ts";
 export { defineMiddleware, type Middleware } from "./middleware.ts";
 export { defineResource, type Resource } from "./resource.ts";

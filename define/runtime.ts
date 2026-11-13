@@ -1,5 +1,9 @@
 /** The person or program a conversation acts for. Every run gives one: no tool or agent passes it on. */
-export type Caller = { id: string };
+export type Caller = {
+  id: string;
+  /** What to call them, such as their full name: the model is told it when it acts in a service for them. */
+  name?: string;
+};
 
 /**
  * A conversation as its first run made it, read from its document: what a resource and a middleware's `beforeAgent`

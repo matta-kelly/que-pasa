@@ -8,6 +8,13 @@ import { defineResource, type Resource } from "./resource.ts";
  */
 export type ConnectionOwner = "user" | "shared";
 
+/** Who a connection is logged in as, in its service (an Odoo user): so "me" and "mine" mean something to the model. */
+export type ServiceIdentity = {
+  id: string | number;
+  name: string;
+  email?: string;
+};
+
 /**
  * A link to one outside service, after LangChain's connections and que v1's connectors: a resource whose value is the
  * connection a tool acts through, such as a logged-in client. A tool lists it in `uses` and gets it with
@@ -23,6 +30,8 @@ export type Connection<C = unknown> = Resource<C> & {
   readonly credential: z.ZodType;
   /** The connection, from a login that passed `credential`. */
   connect(credential: unknown): C | Promise<C>;
+  /** Who the connection is logged in as. A run asks once, at its start, and tells the model in its system prompt. */
+  whoami?(connection: C): ServiceIdentity | Promise<ServiceIdentity>;
 };
 
 /** A connection, checked: its name is kebab-case, its owner one of the two, and its description not empty. */
@@ -32,6 +41,7 @@ export function defineConnection<S extends z.ZodType, C>(connection: {
   owner: ConnectionOwner;
   credential: S;
   connect(credential: z.infer<S>): C | Promise<C>;
+  whoami?(connection: C): ServiceIdentity | Promise<ServiceIdentity>;
 }): Connection<C> {
   const { name } = defineResource<C>(connection.name);
   if (connection.owner !== "user" && connection.owner !== "shared") {

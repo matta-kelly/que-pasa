@@ -21,13 +21,18 @@ import type { z } from "zod";
 import {
   type Agent,
   type Caller,
-  type Connection,
-  isConnection,
+  type ConversationOf,
   type Json,
   parseModel,
+  type ServiceIdentity,
 } from "../define/index.ts";
 import { ConnectionsMissing, RunFailed, RunRefused } from "./errors.ts";
-import { type AnyAgent, agentExtension, submitTool } from "./extension.ts";
+import {
+  type AnyAgent,
+  agentExtension,
+  connectionsOf,
+  submitTool,
+} from "./extension.ts";
 import {
   createResources,
   type CredentialFor,
@@ -189,14 +194,38 @@ export async function openRuntime({
    * The credential gate, as LangChain's before the first model turn: a run whose caller has no login for a connection
    * its agent's tools use is refused before anything of it is kept.
    */
-  async function gate(agent: AnyAgent, caller: Caller) {
-    const missing = await resources.missing(caller, connectionsOf(agent));
-    if (missing.length === 0) return;
-    const names = missing.map((connection) => `"${connection.name}"`);
-    throw new ConnectionsMissing(
-      missing,
-      `agent "${agent.name}": "${caller.id}" has no login for ${names.join(", ")}`,
-    );
+  async function gate(agent: AnyAgent, of: ConversationOf) {
+    const connections = connectionsOf(agent);
+    const missing = await resources.missing(of.caller, connections);
+    if (missing.length > 0) {
+      const names = missing.map((connection) => `"${connection.name}"`);
+      throw new ConnectionsMissing(
+        missing,
+        `agent "${agent.name}": "${of.caller.id}" has no login for ${names.join(", ")}`,
+      );
+    }
+    // Who each connection is logged in as, asked once: the run keeps it, and its system prompt says it.
+    const identities: Record<string, ServiceIdentity> = {};
+    for (const connection of connections) {
+      if (!connection.whoami) continue;
+      let who: ServiceIdentity;
+      try {
+        who = await connection.whoami(await resources.use(of, connection));
+      } catch (error) {
+        // A run that started without it would read "my" wrong: it does not start.
+        throw new RunRefused(
+          "connection_failed",
+          `connection "${connection.name}": who it is logged in as could not be read: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
+      }
+      identities[connection.name] = {
+        id: who.id,
+        name: who.name,
+        ...(who.email === undefined ? {} : { email: who.email }),
+      };
+    }
+    return identities;
   }
 
   /**
@@ -315,7 +344,15 @@ export async function openRuntime({
     } = options;
     const model = options.model ?? agent.model;
     parseModel(model);
-    if (!(await admitted(key, runId))) await gate(entry.agent, caller);
+    const identities = (await admitted(key, runId))
+      ? {}
+      : await gate(entry.agent, {
+          conversation: key,
+          caller,
+          ...(options.context === undefined
+            ? {}
+            : { context: options.context }),
+        });
     const parent = activeParent();
     const conversation = await conversationOf(agent, entry.extension, {
       conversation: key,
@@ -326,6 +363,7 @@ export async function openRuntime({
     const submission = await admit(conversation, key, runId, input, {
       model,
       ...(parent === undefined ? {} : { trace: parent }),
+      ...(Object.keys(identities).length > 0 ? { identities } : {}),
     });
     onStarted?.();
     try {
@@ -369,17 +407,6 @@ export async function openRuntime({
       resources.clear();
     },
   };
-}
-
-/** The connections the agent's tools use, each once, in the order its tools name them. */
-function connectionsOf(agent: AnyAgent): Connection[] {
-  const byName = new Map<string, Connection>();
-  for (const tool of agent.tools) {
-    for (const resource of tool.uses ?? []) {
-      if (isConnection(resource)) byName.set(resource.name, resource);
-    }
-  }
-  return [...byName.values()];
 }
 
 /** Refuse a run that gives a conversation another agent, caller or context than its first run made it with. */

@@ -11,15 +11,18 @@ import {
   type PromptSection,
 } from "@earendil-works/pi-durable";
 import { z } from "zod";
-import type {
-  Agent,
-  Json,
-  Middleware,
-  Runtime,
-  Tool,
+import {
+  type Agent,
+  type Connection,
+  isConnection,
+  type Json,
+  type Middleware,
+  type Runtime,
+  type ServiceIdentity,
+  type Tool,
 } from "../define/index.ts";
 import type { Resources } from "./resources.ts";
-import { ConversationDoc, MiddlewareDoc } from "./state.ts";
+import { ConversationDoc, MiddlewareDoc, RunDoc } from "./state.ts";
 import { hasResult, messagesOf, userText } from "./transcript.ts";
 
 /** Any agent, as the runtime holds it. */
@@ -58,11 +61,94 @@ export function agentExtension(
   return defineExtension({
     name: extensionName(agent),
     tools,
-    sections: (agent.middleware ?? []).flatMap((middleware) =>
-      middleware.systemPrompt ? [sectionOf(middleware)] : [],
-    ),
+    sections: [
+      ...(agent.middleware ?? []).flatMap((middleware) =>
+        middleware.systemPrompt ? [sectionOf(middleware)] : [],
+      ),
+      ...(connectionsOf(agent).some((connection) => connection.whoami)
+        ? [identitySection(agent)]
+        : []),
+    ],
     hooks: output ? [remind] : [],
   });
+}
+
+/** The connections the agent's tools use, each once, in the order its tools name them. */
+export function connectionsOf(agent: AnyAgent): Connection[] {
+  const byName = new Map<string, Connection>();
+  for (const tool of agent.tools) {
+    for (const resource of tool.uses ?? []) {
+      if (isConnection(resource)) byName.set(resource.name, resource);
+    }
+  }
+  return [...byName.values()];
+}
+
+/** The key of the section that says who the agent acts as in each service. */
+export const identityKey = "connections";
+
+/**
+ * Who the agent acts for, and who it is logged in as in each of its connections, as the system prompt says it: a shared
+ * login is said to be one, so "my" means the caller, never the shared account. Undefined when the run knows none.
+ */
+export function identityText(
+  agent: AnyAgent,
+  known: Known | undefined,
+): string | undefined {
+  if (!known) return undefined;
+  const { caller, identities } = known;
+  const lines = connectionsOf(agent).flatMap(({ name, owner }) => {
+    const who = identities?.[name];
+    if (!who) return [];
+    const more = [`id ${who.id}`, ...(who.email ? [who.email] : [])];
+    const whose =
+      owner === "user"
+        ? "the login of the person you act for"
+        : "a shared login, not the person you act for";
+    return [`- ${name}: ${who.name} (${more.join(", ")}): ${whose}`];
+  });
+  if (lines.length === 0) return undefined;
+  const person = caller.name ? `${caller.name} (${caller.id})` : caller.id;
+  return [
+    `You act for ${person}.`,
+    "In these services you are logged in as:",
+    ...lines,
+  ].join("\n");
+}
+
+/** What a run knows of who it acts for and as: its conversation's caller, and its connections' identities. */
+type Known = {
+  caller: { id: string; name?: string };
+  identities: Readonly<Record<string, ServiceIdentity>> | undefined;
+};
+
+/** What the conversation's run going on, or its last, knows of who it acts for and as. */
+export async function identitiesOf(
+  reader: DocumentReader,
+  id: ConversationId,
+  context: Context,
+): Promise<Known | undefined> {
+  const kept = await reader.snapshot(ConversationDoc, id, context);
+  const runId = kept?.runs.at(-1);
+  if (!kept || runId === undefined) return undefined;
+  const run = await reader.snapshot(RunDoc, id, runId, context);
+  return { caller: kept.caller, identities: run?.identities };
+}
+
+/**
+ * Who the agent acts as in each service, so "me" and "mine" resolve: rendered before each request from the run's
+ * document, which its start wrote, never from a login.
+ */
+function identitySection(agent: AnyAgent): PromptSection {
+  return {
+    key: identityKey,
+    tag: false,
+    render: async (input, context) =>
+      identityText(
+        agent,
+        await identitiesOf(input.read, input.conversationId, context),
+      ),
+  };
 }
 
 /** The key of a middleware's section of the system prompt. */

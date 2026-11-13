@@ -1665,6 +1665,173 @@ describe("a run's connections", () => {
     }
   });
 
+  it("tells the model who each connection is logged in as, asked once when the run starts", async () => {
+    let asked = 0;
+    const crm = defineConnection({
+      name: "crm",
+      owner: "user",
+      credential: z.object({ token: z.string() }),
+      connect: ({ token }) => ({ token }),
+      whoami: ({ token }) => {
+        asked += 1;
+        return { id: 7, name: `${token} kelly`, email: `${token}@lotus.test` };
+      },
+    });
+    const mine = defineTool({
+      name: "my_leads",
+      description: "Read my leads.",
+      schema: z.object({}),
+      uses: [crm],
+      run: () => "no leads",
+    });
+    const { faux, models, model } = scripted();
+    const prompts: string[] = [];
+    faux.setResponses([
+      (context: { messages: Message[] }) => {
+        prompts.push(
+          context.messages
+            .flatMap((m) =>
+              m.role === "system"
+                ? Object.values(
+                    (m as { sections?: Record<string, string> }).sections ?? {},
+                  )
+                : [],
+            )
+            .join("\n"),
+        );
+        return fauxAssistantMessage([fauxText("None of yours.")]);
+      },
+    ]);
+    const agent = defineAgent({
+      name: "seller",
+      model,
+      instructions: "Sell.",
+      tools: [mine],
+    });
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [agent],
+      credentialFor: ({ caller }) => ({ token: caller.id }),
+    });
+    try {
+      const go = () =>
+        runtime.run(agent, "My leads?", {
+          conversation: "c",
+          runId: "1",
+          caller,
+        });
+      await go();
+      await go();
+    } finally {
+      await runtime.close();
+    }
+    expect(asked).toBe(1);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain(
+      "You act for matt.\nIn these services you are logged in as:\n" +
+        "- crm: matt kelly (id 7, matt@lotus.test): the login of the person you act for",
+    );
+    expect(prompts[0]!.indexOf("crm: matt kelly")).toBeLessThan(
+      prompts[0]!.indexOf("Sell."),
+    );
+  });
+
+  it("says a shared login is not the person the agent acts for, and names that person", async () => {
+    const odoo = defineConnection({
+      name: "odoo",
+      owner: "shared",
+      credential: z.object({ token: z.string() }),
+      connect: () => ({}),
+      whoami: () => ({ id: 2, name: "Landl Agent" }),
+    });
+    const orders = defineTool({
+      name: "my_orders",
+      description: "Read my orders.",
+      schema: z.object({}),
+      uses: [odoo],
+      run: () => "none",
+    });
+    const { faux, models, model } = scripted();
+    let prompt = "";
+    faux.setResponses([
+      (context: { messages: Message[] }) => {
+        prompt = JSON.stringify(context.messages);
+        return fauxAssistantMessage([fauxText("None.")]);
+      },
+    ]);
+    const agent = defineAgent({
+      name: "orders",
+      model,
+      instructions: "Help.",
+      tools: [orders],
+    });
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [agent],
+      credentialFor: () => ({ token: "shared" }),
+    });
+    try {
+      await runtime.run(agent, "My orders?", {
+        conversation: "c",
+        runId: "1",
+        caller: { id: "rep@lotus.test", name: "Ana Rep" },
+      });
+    } finally {
+      await runtime.close();
+    }
+    expect(prompt).toContain("You act for Ana Rep (rep@lotus.test).");
+    expect(prompt).toContain(
+      "- odoo: Landl Agent (id 2): a shared login, not the person you act for",
+    );
+  });
+
+  it("does not start a run whose connection cannot say who it is logged in as", async () => {
+    const down = defineConnection({
+      name: "odoo",
+      owner: "user",
+      credential: z.object({ token: z.string() }),
+      connect: () => ({}),
+      whoami: () => {
+        throw new Error("odoo is down");
+      },
+    });
+    const read = defineTool({
+      name: "read_odoo",
+      description: "Read Odoo.",
+      schema: z.object({}),
+      uses: [down],
+      run: () => "x",
+    });
+    const { faux, models, model } = scripted();
+    const agent = defineAgent({
+      name: "reader",
+      model,
+      instructions: "Read.",
+      tools: [read],
+    });
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [agent],
+      credentialFor: () => ({ token: "t" }),
+    });
+    try {
+      const refused = await runtime
+        .run(agent, "Read.", { conversation: "c", runId: "1", caller })
+        .catch((error: unknown) => error);
+      expect(refused).toBeInstanceOf(RunRefused);
+      expect(refused).toMatchObject({
+        reason: "connection_failed",
+        message: expect.stringContaining("odoo is down"),
+      });
+      expect(faux.state.callCount).toBe(0);
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it("refuses at open an agent whose tools use a connection when the runtime has no credentialFor", async () => {
     await expect(setup(undefined)).rejects.toThrow(
       'tool "read_notes" uses connection "notes", and the runtime has no credentialFor',

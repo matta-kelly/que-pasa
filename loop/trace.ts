@@ -77,6 +77,8 @@ import {
 import { parseModel } from "../define/index.ts";
 import {
   type AnyAgent,
+  identitiesOf,
+  identityText,
   jsonSchema,
   reminder,
   submitTool,
@@ -428,6 +430,11 @@ async function systemOf(
     const text = middleware.systemPrompt(kept?.state ?? null);
     if (text !== undefined) parts.push(text);
   }
+  const identities = identityText(
+    agent,
+    await identitiesOf(reader, id, context),
+  );
+  if (identities !== undefined) parts.push(identities);
   return [...parts, agent.instructions];
 }
 

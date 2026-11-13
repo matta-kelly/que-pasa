@@ -4,7 +4,7 @@ import {
   defineDocFamily,
   type UsageState,
 } from "@earendil-works/pi-durable";
-import type { Caller, Json } from "../define/index.ts";
+import type { Caller, Json, ServiceIdentity } from "../define/index.ts";
 
 /** A span a run's trace hangs from, as plain JSON: the ids of OpenTelemetry's span context. */
 export type TraceParent = {
@@ -53,6 +53,8 @@ export type RunState = {
   spent: UsageState;
   /** The parent of each of its trace's segments: the host's span it was started in, or its first segment. */
   trace?: TraceParent;
+  /** Who each of its connections with a `whoami` was logged in as when it started, by the connection's name. */
+  identities?: Record<string, ServiceIdentity>;
 };
 
 /** A run's document, by its run id. */

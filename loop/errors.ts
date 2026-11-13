@@ -11,7 +11,9 @@ export type RefusedReason =
   /** A run goes on on its conversation. */
   | "busy"
   /** The caller has no login for a connection the agent's tools use. */
-  | "needs_connection";
+  | "needs_connection"
+  /** A connection could not be made, or could not say who it is logged in as, at the run's start. */
+  | "connection_failed";
 
 /** A run refused before it was admitted, with why. The same run asked again later may be admitted. */
 export class RunRefused extends Error {

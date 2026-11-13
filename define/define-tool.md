@@ -41,7 +41,8 @@ A tool reaches what it acts on through a resource, which the host gives each con
 	- a tool lists it in `uses`, as any resource; an agent's connections are the ones its tools use
 	- the deployment hands over the logins, from its control plane: `openRuntime({ credentialFor })`, for a connection and a caller. A tool that uses a connection, on a runtime with none, fails the runtime's open
 	- the gate: a run checks at its start that its caller has every login its agent's tools use, as LangChain's credential gate before the first model turn. One missing refuses the run before anything of it is kept (`ConnectionsMissing`); the server answers `needs_connection`, with the deployment's page to connect it ([[que-pasa-server]])
-	- not built: `whoami` (telling the model who a connection is logged in as), and asking for a login mid-run, when a tool first needs it, which needs the durable interrupt
+	- its `whoami`, optional: who the connection is logged in as (an id, a name, an email), so "me" and "mine" mean something to the model. A run asks once, at its start, keeps the answer in its document, and its system prompt says it, after the middleware's sections and before the instructions: who the agent acts for (the caller's id, and name when the host gives one), and for each connection who it is logged in as and whose login that is, so a shared login is never taken for the caller. A `whoami` that fails refuses the run (`connection_failed`), as a run that started without it would read "my" wrong
+	- not built: asking for a login mid-run, when a tool first needs it, which needs the durable interrupt
 - permissions are held at the tool and at the target system, never trusted to the agent
 	- hiding a tool keeps an agent on task; the login, or the sandbox's wall, keeps it safe
 

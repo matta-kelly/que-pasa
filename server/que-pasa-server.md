@@ -18,7 +18,7 @@ A deployment's agents, reached from outside its process: one agent, from any way
 A process on the network that starts runs for whoever calls: for each request it asks the deployment four questions, then runs the agent on the deployment's runtime.
 - created with `createServer({ runtime, authenticate, agentsFor, contextFor, onError })`: the deployment opens the runtime and gives its answers as hooks
 - the questions, each answered by the deployment from its control plane (its config, its vault, its login provider):
-	- who is calling: `authenticate(request)`, the caller, or none (401). LangGraph's `@auth.authenticate`
+	- who is calling: `authenticate(request)`, the caller (`{ id, name? }`; the name is what the model calls them), or none (401). LangGraph's `@auth.authenticate`
 	- which agents they get: `agentsFor(caller)`. LangGraph's `@auth.on`
 	- what context a conversation is made with: `contextFor({ caller, agent, conversation, request })`, none when left out. A request never sets the context; a deployment that lets a client ask for something reads the request in this hook, and throws `Refused` (403) for what it does not allow
 	- which login a tool acts with: `credentialFor`, given to the runtime ([[define-tool#Reaching an outside system]]); and where a person connects one: `connectUrl({ connection, caller })`, the deployment's page
@@ -50,6 +50,7 @@ A process on the network that starts runs for whoever calls: for each request it
 | 404 | `conversation_not_found` | another caller's conversation, shown as not found |
 | 409 | `other_agent`, `other_context` | the conversation was made with another agent, or another context |
 | 422 | `busy` | a run goes on on the conversation (LangGraph's status for its "reject" strategy) |
+| 502 | `connection_failed` | a connection could not be made, or could not say who it is logged in as, at the run's start |
 | 500 | `internal` | an error the server did not expect, given to `onError` |
 
 - once admitted: 200 at once, a newline each second while the run goes on, then `{ conversation, runId, status, ... }`. Leading newlines are valid JSON, and keep a proxy, such as Cloudflare's 100-second limit, from cutting a long run (LangGraph's `waitKeepAlive`)

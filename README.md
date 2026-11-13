@@ -69,6 +69,7 @@ const odoo = defineConnection({
   name: "odoo", owner: "user",                       // each person's own login; "shared" for one login
   credential: z.object({ url: z.string(), db: z.string(), apiKey: z.string() }),
   connect: (login) => odooClient(login),             // what tools act through
+  whoami: (client) => client.me(),                   // optional: { id, name, email }, so "my" means something
 });
 const readPartners = defineTool({
   name: "read_partners", description, schema, uses: [odoo],

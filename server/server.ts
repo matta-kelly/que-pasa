@@ -28,10 +28,10 @@ type AnyAgent = Agent<z.ZodObject | undefined, Json | undefined>;
 /** A request the server refuses, with its HTTP status and a code a client can act on. */
 export class ServerError extends Error {
   override readonly name: string = "ServerError";
-  readonly status: 400 | 401 | 403 | 404 | 409 | 422;
+  readonly status: 400 | 401 | 403 | 404 | 409 | 422 | 502;
   readonly code: string;
   constructor(
-    status: 400 | 401 | 403 | 404 | 409 | 422,
+    status: 400 | 401 | 403 | 404 | 409 | 422 | 502,
     code: string,
     message: string,
     options?: ErrorOptions,
@@ -365,6 +365,10 @@ function refusalOf(error: unknown, conversation: string) {
       );
     case "busy":
       return new ServerError(422, "busy", error.message, { cause: error });
+    case "connection_failed":
+      return new ServerError(502, "connection_failed", error.message, {
+        cause: error,
+      });
     default:
       return new ServerError(409, error.reason, error.message, {
         cause: error,
