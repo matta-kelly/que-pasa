@@ -1,4 +1,4 @@
-import type { Connection } from "../define/index.ts";
+import type { Connection, Interrupt } from "../define/index.ts";
 
 /** Why a run was refused before it was admitted: nothing of it was kept. */
 export type RefusedReason =
@@ -13,7 +13,9 @@ export type RefusedReason =
   /** The caller has no login for a connection the agent's tools use. */
   | "needs_connection"
   /** A connection could not be made, or could not say who it is logged in as, at the run's start. */
-  | "connection_failed";
+  | "connection_failed"
+  /** Answers named a question the run does not wait on, or the run was never started or has ended. */
+  | "not_interrupted";
 
 /** A run refused before it was admitted, with why. The same run asked again later may be admitted. */
 export class RunRefused extends Error {
@@ -40,13 +42,21 @@ export class ConnectionsMissing extends RunRefused {
 
 /**
  * A run that was admitted and ended with no result: pi's reason (`aborted`, `model_error`, `restart_limit` and the
- * others), or `no_submit` for an agent with an output that never submitted.
+ * others), `no_submit` for an agent with an output that never submitted, or, for a run nobody attends, the question a
+ * call asked before it acted: `needs_connection` for a login, `needs_answer` for anything else.
  */
 export class RunFailed extends Error {
   override readonly name = "RunFailed";
   readonly reason: string;
-  constructor(reason: string, message: string) {
+  /** The questions it stopped on, when it stopped on any. */
+  readonly interrupts: readonly Interrupt[];
+  constructor(
+    reason: string,
+    message: string,
+    interrupts: readonly Interrupt[] = [],
+  ) {
     super(message);
     this.reason = reason;
+    this.interrupts = interrupts;
   }
 }

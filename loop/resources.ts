@@ -11,13 +11,25 @@ export type { ConversationOf };
 
 /**
  * The deployment's logins, from its control plane: for a `user` connection the caller's own, for a `shared` one the one
- * login when the caller may use it, or undefined when there is none. que-pasa keeps no login: it asks each time a run
- * starts, and again when a tool first needs the connection in a process.
+ * login when the caller may use it, or undefined when there is none. que-pasa keeps no login: it asks when a run starts,
+ * when a tool first needs the connection in a process, and again after the service refused it.
  */
 export type CredentialFor = (request: {
   connection: Connection;
   caller: Caller;
 }) => Json | undefined | Promise<Json | undefined>;
+
+/** What resolving a connection throws when the deployment has no login for the caller. */
+export class NoLogin extends Error {
+  override readonly name = "NoLogin";
+  readonly connection: Connection;
+  constructor(connection: Connection, caller: Caller) {
+    super(
+      `connection "${connection.name}": there is no login for "${caller.id}"`,
+    );
+    this.connection = connection;
+  }
+}
 
 /** The host's value of one resource, per conversation. */
 export type Provider<T = unknown> = {
@@ -82,11 +94,7 @@ export function createResources(
     resource: connection,
     async resolve({ caller }) {
       const login = await loginOf(connection, caller);
-      if (!login) {
-        throw new Error(
-          `connection "${connection.name}": there is no login for "${caller.id}"`,
-        );
-      }
+      if (!login) throw new NoLogin(connection, caller);
       return connection.connect(login.credential);
     },
   });
@@ -147,6 +155,10 @@ export function createResources(
         if (!(await loginOf(connection, caller))) missing.push(connection);
       }
       return missing;
+    },
+    /** Drop one value of a conversation, such as a connection whose login the service refused: the next use resolves it again. */
+    drop(conversation: string, resource: string) {
+      resolved.get(conversation)?.delete(resource);
     },
     /** Drop a conversation's values, when its run ends. */
     forget(conversation: string) {

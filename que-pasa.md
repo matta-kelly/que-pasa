@@ -46,14 +46,14 @@ What is written in a workspace's own repo, with que-pasa's `define`: its agents,
 	- its core: a name (kebab-case), a model (`provider:model-id`), instructions, the tools it may call and no others, and the shape of its result. With none, it answers in text
 	- it acts as the caller, with each person's own login, or with a shared one, through the connections its tools use ([[define-tool#Reaching an outside system]])
 	- context scope and lifecycle are settings, not kinds of agent: a chat agent keeps one conversation, a worker one task, an ephemeral one one call. A conversation keeps its history across runs ([[que-pasa-loop#Conversation and run]]); a host picks the scope by its conversation key
-	- middleware ([[que-pasa-middleware]]): optional behaviours on its loop, each separate, in LangChain's shape. Built: the primitive, with the hooks memory needs, and memory. Approval, summarize and call limits are not built
+	- middleware ([[que-pasa-middleware]]): optional behaviours on its loop, each separate, in LangChain's shape. Built: the primitive, with the hooks memory and approval need, memory, and approval (`humanInTheLoop`). Summarize and call limits are not built
 - what an agent is built from
 	- tools (`defineTool`): [[define-tool]]. A function an agent can call, written once, so any agent in the workspace can be given it. It gets what it acts on from its conversation as a resource, a sandbox or a login, and never holds it
 		- ready-made: the file and command tools of [[que-pasa-sandbox]], which act in the sandbox the host gives each conversation
 	- memory: files the model always reads, loaded once when a conversation is made and kept in it, picked by `memory({ backend, sources })` in the agent's middleware, after Deep Agents' `MemoryMiddleware`. A file of `memory/` can serve any agent; the role's note links what its agent loads. Read only: the agent does not edit it
 	- skills: packaged know-how for one kind of task, a folder with `SKILL.md` (the Agent Skills format). The agent sees each skill's name and description at start, and reads the rest when a task matches. Not built
 	- connections (`defineConnection`): a resource that links to one outside service through a login, which its tools list in `uses` ([[define-tool#Reaching an outside system]])
-		- owned by a user: each person connects their own account once, in the deployment's control plane; a run whose caller has not is refused at its start, with the page to connect it
+		- owned by a user: each person connects their own account once, in the deployment's control plane; a run someone attends asks them at the tool call that needs it, with the page to connect it, and goes on once connected; a run nobody attends is refused at its start
 		- shared: one login for the deployment, which its control plane lets some callers use
 - what an agent is proven by: tests, eval cases beside the capability they check. Every agent is developed against its cases and proven by them. Not built
 - who is given which agents: teams, a group of people and the agents they are given. Everyone in a team can run its agents; one person is a team of one. Not built
@@ -62,9 +62,10 @@ What is written in a workspace's own repo, with que-pasa's `define`: its agents,
 
 [[que-pasa-loop]]: what an agent does when it runs: a conversation of one agent and one caller, and its runs, each one input. The agent remembers nothing; its conversation is a log, kept durably, so a run goes on after a crash and leaves a full record.
 - a conversation carries its caller: tools read it from the conversation, and no tool or agent passes the user along. The caller can be a person, or a program: a service, or the agent itself
-- a person, a schedule, an event or code starts a run. Today `run()` waits for the run's end; a run started and left to go on, to be picked up later by its run id, for a schedule or an event, is not built
+- a person, a schedule, an event or code starts a run, and says whether someone attends it. `run()` waits for the run's end, or until it waits on a question; a run started and left to go on, to be picked up later by its run id, for a schedule or an event, is not built
+- a tool call can stop to ask a person, such as for an approval or a login, and go on at that call with the answer, across a crash: the interrupt ([[que-pasa-loop#The interrupt]]), after LangGraph's
 - a run's life: it starts from an input, moves through model and tool calls, and ends with an answer or a submit. The conversation's next run starts from a new input, with the whole history
-- what keeps it right: durability, so a finished step is never done twice; middleware, whose state a conversation keeps, so every run on it, also one that resumes, has what it was made with. Approval and limits are not built
+- what keeps it right: durability, so a finished step is never done twice and a person is never asked twice; middleware, whose state a conversation keeps, so every run on it, also one that resumes, has what it was made with; approval, a person's yes before a gated call. Limits are not built
 - what it leaves: its result, usage, conversation, and its trace, which is what evals read
 
 ## Host

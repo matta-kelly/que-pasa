@@ -185,4 +185,25 @@ describe("a run killed at a crash point and opened again in a new process", () =
     expect(seen.calls).toBe(0);
     expect(seen.messages.at(-1)).toBe("submit");
   });
+
+  it("killed while a call waits on its approval: the next process takes the answer, and the call goes on, once", async () => {
+    const seen = await crashAndResume("waiting");
+    expect(seen.value).toEqual(done);
+    expect(seen.ran).toEqual(["first"]);
+    expect(seen.messages.filter((m) => m.startsWith("step"))).toEqual(["step"]);
+    expect(seen.calls).toBe(1);
+  });
+
+  it("killed after the answer, before the tool ran: the next process goes on with the kept answer, asking nobody", async () => {
+    const seen = await crashAndResume("answered");
+    expect(seen.value).toEqual(done);
+    expect(seen.ran).toEqual(["first"]);
+    expect(seen.calls).toBe(1);
+  });
+
+  it("a run nobody attends, killed before its call asks: the next process asks, and the run fails before the tool acts", async () => {
+    const seen = await crashAndResume("unattended");
+    expect(seen.value).toEqual({ failed: "needs_answer" });
+    expect(seen.ran).toEqual([]);
+  });
 }, 60_000);

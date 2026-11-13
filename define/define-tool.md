@@ -1,6 +1,6 @@
 ---
 type: component
-description: "A que-pasa tool: a function an agent can call, written once in a workspace, which gets what it acts on (a sandbox, a login) from its run as a resource and never holds it. Read for what a tool is, how it reaches an outside system safely, through a resource or a connection, how a run calls it, and what is not built: approvals."
+description: "A que-pasa tool: a function an agent can call, written once in a workspace, which gets what it acts on (a sandbox, a login) from its run as a resource and never holds it. Read for what a tool is, how it reaches an outside system safely, through a resource or a connection, how a person approves a call, and how a run calls it."
 status: running
 ---
 A function an agent can call: written once in a workspace, so any agent in it can be given it. The code is `defineTool`, in `define/tool.ts`.
@@ -40,26 +40,31 @@ A tool reaches what it acts on through a resource, which the host gives each con
 	- its `credential`: the login's shape (zod), and `connect`, which turns a login into the connection a tool acts through, such as a logged-in client. The tool gets the connection with `runtime.use`, never the login, and no login enters the model's context, the storage or a trace
 	- a tool lists it in `uses`, as any resource; an agent's connections are the ones its tools use
 	- the deployment hands over the logins, from its control plane: `openRuntime({ credentialFor })`, for a connection and a caller. A tool that uses a connection, on a runtime with none, fails the runtime's open
-	- the gate: a run checks at its start that its caller has every login its agent's tools use, as LangChain's credential gate before the first model turn. One missing refuses the run before anything of it is kept (`ConnectionsMissing`); the server answers `needs_connection`, with the deployment's page to connect it ([[que-pasa-server]])
-	- its `whoami`, optional: who the connection is logged in as (an id, a name, an email), so "me" and "mine" mean something to the model. A run asks once, at its start, keeps the answer in its document, and its system prompt says it, after the middleware's sections and before the instructions: who the agent acts for (the caller's id, and name when the host gives one), and for each connection who it is logged in as and whose login that is, so a shared login is never taken for the caller. A `whoami` that fails refuses the run (`connection_failed`), as a run that started without it would read "my" wrong
-	- not built: asking for a login mid-run, when a tool first needs it, which needs the durable interrupt
+	- the guard: before a tool's code runs, its call checks the caller has a login for each connection the tool uses
+		- a run someone attends: a missing `user` login is asked for, with the interrupt ([[que-pasa-loop#The interrupt]]): "connect it", which the server gives with the deployment's page ([[que-pasa-server]]). Once answered it checks again, and asks again while the login is still missing
+		- a missing `shared` login: the model is told it has no access, and nobody is asked, as the caller cannot fix it
+		- a run nobody attends: the credential gate at its start, as LangChain's before the first model turn, checks every login its agent's tools use, and refuses the run before anything of it is kept (`ConnectionsMissing`), as nobody could connect one later. It asks for every connection the tools use, also one this run would not: a chosen cost for one simple rule
+	- a login is asked for when a run starts, and when a call first needs it in a process; never kept. A login the service refuses: the connection's client, or the tool, throws `LoginRejected`, the run drops the connection, and the next call asks the deployment again
+	- its `whoami`, optional: who the connection is logged in as (an id, a name, an email), so "me" and "mine" mean something to the model. A run asks at its start, for each login there, or once the person connects it; keeps the answer in its document, and its system prompt says it, after the middleware's sections and before the instructions: who the agent acts for (the caller's id, and name when the host gives one), and for each connection who it is logged in as and whose login that is, so a shared login is never taken for the caller. A `whoami` that fails at the start refuses the run (`connection_failed`), as a run that started without it would read "my" wrong
 - permissions are held at the tool and at the target system, never trusted to the agent
 	- hiding a tool keeps an agent on task; the login, or the sandbox's wall, keeps it safe
 
 ## Approval
 
-A tool that changes data can need a yes before it runs. Not built.
-- an approval is middleware on the tool, and names who approves: the caller, or a named person
-- a run waiting for the yes is durability holding state while a person decides: the run keeps, across a crash, until the answer comes
-- where it would sit: pi's `beforeTool` hook, which can block a call
+A tool that changes data can need a person's yes before it runs: `humanInTheLoop`, a middleware ([[que-pasa-middleware#Approval]]).
+- the agent lists the tools it gates, by name; the tool itself is unchanged
+- a gated call asks before its tool's code runs, and the run waits, across a crash, until the answer comes: approve, edit, reject or respond
+- who decides, and how the question reaches them, is the deployment's: the server gives it as `interrupted`
 
 ## How a run calls it
 
 The loop gives each tool to pi as a pi tool, and pi records each call in the run's log.
 - pi checks the model's arguments against the tool's JSON Schema (the input shape, so a field with a default is optional); zod parses them; `run` gets the runtime
 - what it gives back goes to the model as text: a string as it is, anything else as JSON. A tool that throws gives the model an error result
+- around its code: the check of its connections, then the agent's middleware, outermost first ([[que-pasa-middleware]]); any of them may ask a person first, and the call waits
 - after a crash
-	- a tool cut off mid-call does not run again: the model gets an `interrupted` result, and decides what to do
+	- a call that had not started its tool's code runs again: a question it asked is found, and it waits again, or goes on with the answer
+	- a tool cut off mid-call does not run again: the model gets an `interrupted` result, and decides what to do. que-pasa keeps a marker just before the tool's code runs, and to pi every tool is replay-safe, so a waiting call can wait again
 	- a `replay: "safe"` tool runs again, with the run's own caller and context, at most five times in a row (pi's restart limit); then the model gets an error result
-- the trace: an `execute_tool <tool>` span per call, with `error.type` on an error result. Its arguments and result only with `captureContent`
+- the trace: an `execute_tool <tool>` span per call, with `error.type` on an error result, and an event per question asked and answer taken. Its arguments and result only with `captureContent`
 - the `submit` tool is the loop's own, for an agent with an output: no agent tool may take its name

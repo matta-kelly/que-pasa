@@ -8,15 +8,16 @@ import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { stream } from "hono/streaming";
 import { z } from "zod";
-import type {
-  Agent,
-  Caller,
-  Connection,
-  ConnectionOwner,
-  Json,
+import {
+  type Agent,
+  type Caller,
+  type Connection,
+  type Interrupt,
+  isConnection,
+  type Json,
 } from "../define/index.ts";
 import {
-  ConnectionsMissing,
+  type ConnectionQuestion,
   RunFailed,
   RunRefused,
   type Runtime,
@@ -74,8 +75,8 @@ export type ServerOptions = {
     request: Request;
   }) => Json | undefined | Promise<Json | undefined>;
   /**
-   * Where a person connects a connection: the deployment's page, from its control plane. Given with a run that needs a
-   * login the caller has not given; left out, none is.
+   * Where a person connects a connection: the deployment's page, from its control plane. Given with a run's question
+   * that asks for a login the caller has not given; left out, none is.
    */
   connectUrl?: (request: {
     connection: Connection;
@@ -85,30 +86,26 @@ export type ServerOptions = {
   onError?: (error: unknown) => void;
 };
 
-/** A connection a caller has to connect before the run starts. */
-export type ConnectionNeeded = {
-  name: string;
-  description?: string;
-  owner: ConnectionOwner;
-  /** The deployment's page to connect it, when it has one. */
-  connectUrl?: string;
-};
-
 /** An agent as a caller sees it. Its input is always one text message. */
 export type AgentInfo = { name: string; description?: string };
 
-/** What a client asks for: one input on a conversation, by the client's own run id. */
-export type RunRequest = { conversation: string; runId: string; input: string };
+/**
+ * What a client asks for, by its own run id: one input on a conversation, or answers to the run's questions, by their
+ * ids, as LangGraph's `Command(resume)`.
+ */
+export type RunRequest = { conversation: string; runId: string } & (
+  | { input: string; resume?: never }
+  | { resume: Record<string, Json>; input?: never }
+);
 
 /**
- * How a run ended: with its result (the agent's text, or its output), or failed with pi's reason or `no_submit`. More
- * cases come with run life, such as a run that waits for an approval, so a client checks `status`.
+ * How a run stands: done with its result (the agent's text, or its output), failed with pi's reason or `no_submit`, or
+ * interrupted, waiting on its questions. A question that asks for a login carries the deployment's `connectUrl`.
  */
 export type RunOutcome =
   | { status: "done"; result: unknown }
   | { status: "failed"; error: { code: string; message: string } }
-  /** The run did not start: the caller has no login for these connections. Once they connect, the same run id runs. */
-  | { status: "needs_connection"; connections: ConnectionNeeded[] };
+  | { status: "interrupted"; interrupts: Interrupt[] };
 
 /** How a client in the same process follows a run. */
 export type RunControl = {
@@ -139,11 +136,22 @@ export type Server = {
 /** How long a run waits between keep-alive signals, as LangGraph's `waitKeepAlive`. */
 const keepAliveMs = 1000;
 
-const RunBody = z.object({
-  agent: z.string().min(1),
-  runId: z.string().min(1),
-  input: z.string().min(1),
-});
+/** A run's body: its input, or LangGraph's `command: { resume }` with answers to its questions, never both. */
+const RunBody = z
+  .strictObject({
+    agent: z.string().min(1),
+    runId: z.string().min(1),
+    input: z.string().min(1).optional(),
+    command: z
+      .strictObject({ resume: z.record(z.string(), z.json()) })
+      .optional(),
+  })
+  .refine(
+    (body) => (body.input === undefined) !== (body.command === undefined),
+    {
+      message: "give input or command, not both",
+    },
+  );
 
 /** A server on a deployment's runtime, with the deployment's answers. */
 export function createServer({
@@ -181,13 +189,16 @@ export function createServer({
   async function start(
     request: Request,
     name: string,
-    { conversation, runId, input }: RunRequest,
+    asked: RunRequest,
     { signal, onKeepAlive }: RunControl = {},
   ): Promise<{ outcome: Promise<RunOutcome> }> {
+    const { conversation, runId } = asked;
+    const input =
+      asked.input !== undefined ? asked.input : { resume: asked.resume };
     for (const [field, value] of Object.entries({
       conversation,
       runId,
-      input,
+      ...(asked.input !== undefined ? { input: asked.input } : {}),
     })) {
       if (value === "")
         throw new ServerError(400, "bad_request", `${field} is empty`);
@@ -210,10 +221,12 @@ export function createServer({
     });
     let admitted = () => {};
     const started = new Promise<void>((resolve) => (admitted = resolve));
+    // A person is at the other end of the server, to answer what a run asks.
     const running = runtime.run(agent, input, {
       conversation,
       runId,
       caller,
+      attended: true,
       ...(context === undefined ? {} : { context }),
       ...(signal ? { signal } : {}),
       onStarted: admitted,
@@ -221,36 +234,32 @@ export function createServer({
     try {
       await Promise.race([started, running]);
     } catch (error) {
-      if (error instanceof ConnectionsMissing) {
-        return { outcome: needed(error.connections, caller) };
-      }
       throw refusalOf(error, conversation);
     }
-    return { outcome: outcomeOf(running, signal, onKeepAlive) };
+    return {
+      outcome: outcomeOf(agent, caller, running, signal, onKeepAlive),
+    };
   }
 
-  /** The connections a caller has to connect, each with the deployment's page for it. */
-  async function needed(
-    connections: readonly Connection[],
+  /** A question as a client gets it: one that asks for a login carries the deployment's page to connect it. */
+  async function shown(
+    agent: AnyAgent,
     caller: Caller,
-  ): Promise<RunOutcome> {
-    const needs: ConnectionNeeded[] = [];
-    for (const connection of connections) {
-      const url = await connectUrl?.({ connection, caller });
-      needs.push({
-        name: connection.name,
-        ...(connection.description === undefined
-          ? {}
-          : { description: connection.description }),
-        owner: connection.owner,
-        ...(url === undefined ? {} : { connectUrl: url }),
-      });
-    }
-    return { status: "needs_connection", connections: needs };
+    interrupt: Interrupt,
+  ): Promise<Interrupt> {
+    const value = interrupt.value as ConnectionQuestion;
+    if (value?.type !== "connection" || !connectUrl) return interrupt;
+    const connection = connectionOf(agent, value.name);
+    const url = connection && (await connectUrl({ connection, caller }));
+    return url === undefined
+      ? interrupt
+      : { ...interrupt, value: { ...value, connectUrl: url } };
   }
 
   async function outcomeOf(
-    running: Promise<unknown>,
+    agent: AnyAgent,
+    caller: Caller,
+    running: ReturnType<Runtime["run"]>,
     signal: AbortSignal | undefined,
     onKeepAlive: (() => void) | undefined,
   ): Promise<RunOutcome> {
@@ -258,7 +267,12 @@ export function createServer({
       ? setInterval(onKeepAlive, keepAliveMs)
       : undefined;
     try {
-      return { status: "done", result: await running };
+      const outcome = await running;
+      if (outcome.status === "done") return outcome;
+      const interrupts: Interrupt[] = [];
+      for (const interrupt of outcome.interrupts)
+        interrupts.push(await shown(agent, caller, interrupt));
+      return { status: "interrupted", interrupts };
     } catch (error) {
       if (error instanceof RunFailed) {
         return {
@@ -285,13 +299,15 @@ export function createServer({
     const body = RunBody.safeParse(await c.req.json().catch(() => undefined));
     if (!body.success)
       throw new ServerError(400, "bad_request", z.prettifyError(body.error));
-    const { agent, runId, input } = body.data;
+    const { agent, runId, input, command } = body.data;
     const conversation = c.req.param("conversation");
-    const { outcome } = await start(c.req.raw, agent, {
-      conversation,
-      runId,
-      input,
-    });
+    const { outcome } = await start(
+      c.req.raw,
+      agent,
+      input !== undefined
+        ? { conversation, runId, input }
+        : { conversation, runId, resume: command!.resume },
+    );
     c.header("Content-Type", "application/json; charset=utf-8");
     // Admitted: 200 now, a newline each second while it runs so no proxy cuts it, then how it ended. A client that hung
     // up fails the writes, never the run: the same run id gives its result again.
@@ -348,6 +364,13 @@ export function createServer({
     run: async (request, agent, run, control) =>
       (await start(request, agent, run, control)).outcome,
   };
+}
+
+/** The connection of this name among the ones an agent's tools use. */
+function connectionOf(agent: AnyAgent, name: string): Connection | undefined {
+  return agent.tools
+    .flatMap((tool) => (tool.uses ?? []).filter(isConnection))
+    .find((connection) => connection.name === name);
 }
 
 /** A run's refusal as the server answers it. Another caller's conversation is not found, as LangGraph shows it. */

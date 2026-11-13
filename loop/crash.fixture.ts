@@ -2,7 +2,8 @@
  * One process of a crash test (crash.test.ts): it opens a runtime on a SQLite file and runs one run, in one of two
  * phases. "first" goes until the scenario's crash point, prints CRASH_POINT and waits there to be killed; in the
  * second-run scenario, a first run on the same conversation ends before it. "second" opens the same file, runs the same
- * run id again, and prints its outcome as one RESULT line. The first phase runs inside a
+ * run id again, and prints its outcome as one RESULT line. In the waiting scenarios a person attends the run, and a
+ * call of the step tool asks for approval first. The first phase runs inside a
  * host span, as a host would, and prints its ids as one HOST line; every span is written to the spans file as it ends,
  * so the spans of a killed process are kept.
  *
@@ -30,13 +31,16 @@ import { z } from "zod";
 import {
   defineAgent,
   defineConnection,
+  defineMiddleware,
   defineResource,
   defineTool,
+  type Middleware,
   type Runtime,
 } from "../define/index.ts";
-import { memory } from "../middleware/index.ts";
+import { humanInTheLoop, memory } from "../middleware/index.ts";
 import { local } from "../sandbox/index.ts";
 import { openRuntime, provide } from "./index.ts";
+import { resultOf } from "./scripted.fixture.ts";
 
 type Scenario =
   | "model"
@@ -46,7 +50,13 @@ type Scenario =
   | "memory"
   | "after-submit"
   | "second-run"
-  | "connection";
+  | "connection"
+  /** Killed while a call waits on its approval; the next process answers, and the call goes on. */
+  | "waiting"
+  /** Killed after the answer, before the tool ran; the next process goes on with the kept answer. */
+  | "answered"
+  /** A run nobody attends, killed before its call asks; the next process asks, and the run fails. */
+  | "unattended";
 const [scenario, phase, file, log, spans] = process.argv.slice(2) as [
   Scenario,
   "first" | "second",
@@ -99,6 +109,12 @@ const submit = fauxAssistantMessage(
   },
 );
 
+/** The step's call, by the id its approval names. */
+const asksStep = fauxAssistantMessage(
+  [fauxToolCall("step", {}, { id: "step-1" })],
+  { stopReason: "toolUse" },
+);
+
 /** What the host provides each run: resolved from the context the run was started with, and named by this process. */
 const tag = defineResource<string>("tag");
 
@@ -143,19 +159,36 @@ const step = defineTool({
 const folder = dirname(log);
 if (scenario === "memory")
   writeFileSync(`${folder}/memory.md`, `memory of the ${phase} phase\n`);
+const waits =
+  scenario === "waiting" ||
+  scenario === "answered" ||
+  scenario === "unattended";
+/** The step's approval, the id its call asks it by. */
+const approval = "step-1:human-in-the-loop:0";
+/** Dies in the first phase, around the approval: after it in the answered scenario, before it in the unattended one. */
+const dies = defineMiddleware({
+  name: "dies",
+  wrapToolCall: async (_request, handler) =>
+    phase === "first" ? crashPoint() : handler(),
+});
+const approve = humanInTheLoop({ interruptOn: { step: true } });
+const middleware: Middleware[] =
+  scenario === "memory"
+    ? [memory({ backend: local({ root: folder }), sources: ["memory.md"] })]
+    : scenario === "waiting"
+      ? [approve]
+      : scenario === "answered"
+        ? [approve, dies]
+        : scenario === "unattended"
+          ? [dies, approve]
+          : [];
 const agent = defineAgent({
   name: "worker",
   model: `${model.provider}:${model.id}`,
   instructions: "Do the step, then submit.",
   tools: [step],
   output: z.object({ verdict: z.enum(["done", "raise"]), note: z.string() }),
-  ...(scenario === "memory"
-    ? {
-        middleware: [
-          memory({ backend: local({ root: folder }), sources: ["memory.md"] }),
-        ],
-      }
-    : {}),
+  middleware,
 });
 
 /** The system prompt of each model request of this process, as its sections' text. */
@@ -214,6 +247,9 @@ faux.setResponses(
             stopReason: "toolUse",
           }),
         ],
+        waiting: [asksStep],
+        answered: [asksStep],
+        unattended: [asksStep],
         "second-run": [
           fauxAssistantMessage(
             [fauxToolCall("submit", { verdict: "raise", note: "first run" })],
@@ -241,15 +277,43 @@ const runtime = await openRuntime({
 });
 let messages: Message[] = [];
 const go = (runId: string, model?: string) =>
-  runtime.run(agent, "Go.", {
-    conversation: "chat-1",
-    runId,
-    caller: { id: "crash-test" },
-    // Each phase gives the context the conversation was made with, as every run on it must.
-    context: { tag: "first" },
-    ...(model ? { model } : {}),
-    onMessages: (all) => (messages = all),
-  });
+  runtime
+    .run(
+      agent,
+      // The waiting scenario's second phase answers the question the first left.
+      scenario === "waiting" && phase === "second"
+        ? { resume: { [approval]: { type: "approve" } } }
+        : "Go.",
+      {
+        conversation: "chat-1",
+        runId,
+        caller: { id: "crash-test" },
+        // Each phase gives the context the conversation was made with, as every run on it must.
+        context: { tag: "first" },
+        attended: waits && scenario !== "unattended",
+        ...(model ? { model } : {}),
+        onMessages: (all) => (messages = all),
+      },
+    )
+    .then(async (outcome) => {
+      // The first phase of the waiting scenarios: the question is kept, and the process dies waiting.
+      if (outcome.status === "interrupted" && phase === "first") {
+        if (scenario === "answered") {
+          await runtime.run(
+            agent,
+            { resume: { [approval]: { type: "approve" } } },
+            {
+              conversation: "chat-1",
+              runId,
+              caller: { id: "crash-test" },
+              context: { tag: "first" },
+            },
+          );
+        }
+        return crashPoint();
+      }
+      return resultOf(outcome);
+    });
 // The second-run scenario's run is the conversation's second, on the fallback model: the first ends before it starts.
 const runId = scenario === "second-run" ? "run-2" : "run-1";
 if (scenario === "second-run" && phase === "first") await go("run-1");
@@ -276,7 +340,9 @@ if (phase === "first") {
   await running;
   if (scenario === "after-submit") await crashPoint();
 } else {
-  const value = await running;
+  const value = await running.catch((error: unknown) => ({
+    failed: (error as { reason?: string }).reason,
+  }));
   const brief = messages.map((message) =>
     message.role === "toolResult"
       ? `${message.toolName}${message.isError ? " error" : ""}`

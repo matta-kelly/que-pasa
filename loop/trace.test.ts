@@ -21,8 +21,9 @@ import {
   defineTool,
   type Middleware,
 } from "../define/index.ts";
+import { humanInTheLoop } from "../middleware/index.ts";
 import { openRuntime } from "./index.ts";
-import { scripted } from "./scripted.fixture.ts";
+import { resultOf, scripted } from "./scripted.fixture.ts";
 import { versionOf } from "./trace.ts";
 
 const exporter = new InMemorySpanExporter();
@@ -90,6 +91,7 @@ async function traced(
         runId: "run-1",
         caller,
       })
+      .then(resultOf)
       .catch((error: unknown) => error);
   try {
     const outcome = host
@@ -264,11 +266,13 @@ describe("a run's trace", () => {
       agents: [agent],
     });
     try {
-      await runtime.run(agent, "Go", {
-        conversation: "chat-1",
-        runId: "run-1",
-        caller,
-      });
+      await runtime
+        .run(agent, "Go", {
+          conversation: "chat-1",
+          runId: "run-1",
+          caller,
+        })
+        .then(resultOf);
     } finally {
       await runtime.close();
     }
@@ -316,16 +320,20 @@ describe("a run's trace", () => {
       captureContent: true,
     });
     try {
-      await runtime.run(agent, "Capital of France?", {
-        conversation: "chat-1",
-        runId: "run-1",
-        caller,
-      });
-      await runtime.run(agent, "And of Italy?", {
-        conversation: "chat-1",
-        runId: "run-2",
-        caller,
-      });
+      await runtime
+        .run(agent, "Capital of France?", {
+          conversation: "chat-1",
+          runId: "run-1",
+          caller,
+        })
+        .then(resultOf);
+      await runtime
+        .run(agent, "And of Italy?", {
+          conversation: "chat-1",
+          runId: "run-2",
+          caller,
+        })
+        .then(resultOf);
     } finally {
       await runtime.close();
     }
@@ -389,11 +397,13 @@ describe("a run's trace", () => {
       credentialFor: () => ({ token: "tok-very-secret" }),
     });
     try {
-      await runtime.run(agent, "Count.", {
-        conversation: "chat-1",
-        runId: "run-1",
-        caller,
-      });
+      await runtime
+        .run(agent, "Count.", {
+          conversation: "chat-1",
+          runId: "run-1",
+          caller,
+        })
+        .then(resultOf);
     } finally {
       await runtime.close();
     }
@@ -406,6 +416,57 @@ describe("a run's trace", () => {
         spans.map((span) => ({ a: span.attributes, e: span.events })),
       ),
     ).not.toContain("tok-very-secret");
+  });
+
+  it("marks on a tool call's span the question it asked and the answer it went on with, and keeps the run open while it waits", async () => {
+    exporter.reset();
+    const { faux, models, model } = scripted();
+    faux.setResponses([
+      fauxAssistantMessage(
+        [fauxToolCall("read_stock", { sku: "A1" }, { id: "s" })],
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage([fauxText("12 units.")]),
+    ]);
+    const agent = defineAgent({
+      name: "stock",
+      model,
+      instructions: "Read stock.",
+      tools: [stock],
+      middleware: [humanInTheLoop({ interruptOn: { read_stock: true } })],
+    });
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [agent],
+    });
+    const options = { conversation: "c", runId: "1", caller, attended: true };
+    try {
+      await runtime.run(agent, "How many A1?", options);
+      expect(named(exporter.getFinishedSpans(), "invoke_agent")).toEqual([]);
+      await runtime
+        .run(
+          agent,
+          { resume: { "s:human-in-the-loop:0": { type: "approve" } } },
+          options,
+        )
+        .then(resultOf);
+    } finally {
+      await runtime.close();
+    }
+    const spans = exporter.getFinishedSpans();
+    expect(only(spans, "invoke_agent").status.code).not.toBe(
+      SpanStatusCode.ERROR,
+    );
+    expect(
+      only(spans, "execute_tool").events.map((event) => [
+        event.name,
+        event.attributes?.["que_pasa.interrupt.id"],
+      ]),
+    ).toEqual([
+      ["que_pasa.interrupt", "s:human-in-the-loop:0"],
+      ["que_pasa.resume", "s:human-in-the-loop:0"],
+    ]);
   });
 
   it("gives an agent one version on one model, and another when what it is changes", () => {

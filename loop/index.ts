@@ -4,6 +4,7 @@ export {
   RunFailed,
   RunRefused,
 } from "./errors.ts";
+export { type ConnectionQuestion } from "./call.ts";
 export { reminder, submitTool } from "./extension.ts";
 export {
   type ConversationOf,
@@ -13,7 +14,9 @@ export {
 } from "./resources.ts";
 export {
   openRuntime,
+  type Resume,
   type RunOptions,
+  type RunOutcome,
   type RunResult,
   type RunUsage,
   type Runtime,

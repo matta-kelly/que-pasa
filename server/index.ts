@@ -1,6 +1,5 @@
 export {
   type AgentInfo,
-  type ConnectionNeeded,
   createServer,
   Refused,
   type RunControl,

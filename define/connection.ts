@@ -19,7 +19,8 @@ export type ServiceIdentity = {
  * A link to one outside service, after LangChain's connections and que v1's connectors: a resource whose value is the
  * connection a tool acts through, such as a logged-in client. A tool lists it in `uses` and gets it with
  * `runtime.use(connection)`; it never gets the login. The deployment hands over the login (`openRuntime({ credentialFor
- * })`), and a run checks at its start that the caller has every one its agent's tools use.
+ * })`). Before a tool's code runs, its run checks the caller has a login for each connection it uses: a run someone
+ * attends asks them to connect a missing one and waits; a run nobody attends checks them all at its start instead.
  */
 export type Connection<C = unknown> = Resource<C> & {
   readonly kind: "connection";
@@ -30,7 +31,10 @@ export type Connection<C = unknown> = Resource<C> & {
   readonly credential: z.ZodType;
   /** The connection, from a login that passed `credential`. */
   connect(credential: unknown): C | Promise<C>;
-  /** Who the connection is logged in as. A run asks once, at its start, and tells the model in its system prompt. */
+  /**
+   * Who the connection is logged in as. A run asks at its start, or once the person connects it, and tells the model in
+   * its system prompt.
+   */
   whoami?(connection: C): ServiceIdentity | Promise<ServiceIdentity>;
 };
 
@@ -63,4 +67,22 @@ export function defineConnection<S extends z.ZodType, C>(connection: {
 /** Whether a resource is a connection. */
 export function isConnection(resource: Resource): resource is Connection {
   return (resource as Partial<Connection>).kind === "connection";
+}
+
+/**
+ * What a connection's client, or a tool, throws when the service refuses the login: the run drops the connection, the
+ * model is told the call failed, and the next call asks the deployment for the login again. A login that is gone then
+ * asks the person to connect it, in a run someone attends.
+ */
+export class LoginRejected extends Error {
+  override readonly name = "LoginRejected";
+  /** The connection's name. */
+  readonly connection: string;
+  constructor(connection: string, message?: string, options?: ErrorOptions) {
+    super(
+      message ?? `connection "${connection}": the service refused the login`,
+      options,
+    );
+    this.connection = connection;
+  }
 }

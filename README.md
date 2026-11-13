@@ -21,9 +21,21 @@ const runtime = await openRuntime({ storage: await openNodeSqliteStorage("runs.s
 const first = await runtime.run(nail, input, { conversation: "cl-42/coder", runId: "1", caller: { id: "assembly" }, context });
 const second = await runtime.run(nail, review, { conversation: "cl-42/coder", runId: "2", caller: { id: "assembly" }, context });
 await runtime.close();
+// first: { status: "done", result } or { status: "interrupted", interrupts }
 ```
 
 A conversation keeps its history across runs: the second run's model has the first's messages. Each run is one input to its own result, usage and trace; a conversation takes one run at a time, and every run on it gives the same agent, caller and context.
+
+A tool call can stop to ask a person, as LangGraph's `interrupt()`. A run someone attends (`attended: true`) then gives back `interrupted`, with its questions, and goes on at that call once answered, as LangGraph's `Command(resume)`; a run nobody attends, the default, fails with the question before the tool acts:
+
+```ts
+import { humanInTheLoop } from "@mku1tra/que-pasa/middleware";
+
+const seller = defineAgent({ name: "seller", model, instructions, tools, middleware: [humanInTheLoop({ interruptOn: { send_quote: true } })] });
+const asked = await runtime.run(seller, "Quote acme.", { conversation, runId: "1", caller, attended: true });
+// asked.interrupts[0]: { id, value: { type: "tool_approval", name: "send_quote", args, description, allowedDecisions } }
+const done = await runtime.run(seller, { resume: { [asked.interrupts[0].id]: { type: "approve" } } }, { conversation, runId: "1", caller });
+```
 
 One runtime per process owns its SQLite file. After a crash, open it again with the same agents: unfinished runs go on, and `run` with the same `runId` gives back the result.
 
@@ -58,9 +70,9 @@ const reviewer = defineAgent({
 });
 ```
 
-What middleware is, and how memory works: `middleware/que-pasa-middleware.md`.
+What middleware is, and how memory and approval work: `middleware/que-pasa-middleware.md`.
 
-A tool reaches an outside service through a connection: the workspace says what it is and whose login it uses, and the deployment hands over the logins from its control plane. A tool gets the connection, never the login, and a run whose caller has not connected is refused at its start:
+A tool reaches an outside service through a connection: the workspace says what it is and whose login it uses, and the deployment hands over the logins from its control plane. A tool gets the connection, never the login. A call that needs a login the caller has not given asks them to connect it, in a run someone attends; a run nobody attends is refused at its start:
 
 ```ts
 import { defineConnection, defineTool } from "@mku1tra/que-pasa/define";
@@ -103,7 +115,7 @@ const server = createServer({
 serve({ fetch: server.fetch, port: 8080 });
 ```
 
-It answers `GET /ok`, `GET /agents`, and `POST /conversations/{conversation}/runs/wait` with `{ agent, runId, input }`, after LangGraph's Agent Server. A way in in the same process, such as an MCP layer, calls `server.agents(request)` and `server.run(request, agent, { conversation, runId, input })`. The routes, the refusals and a long run: `server/que-pasa-server.md`.
+It answers `GET /ok`, `GET /agents`, and `POST /conversations/{conversation}/runs/wait` with `{ agent, runId, input }`, or `{ agent, runId, command: { resume } }` to answer a run's questions, after LangGraph's Agent Server. A way in in the same process, such as an MCP layer, calls `server.agents(request)` and `server.run(request, agent, { conversation, runId, input })`, or `{ conversation, runId, resume }`. Its runs are attended: a run that asks gives back `interrupted`, with its questions. The routes, the refusals and a long run: `server/que-pasa-server.md`.
 
 ## Use it from another project
 

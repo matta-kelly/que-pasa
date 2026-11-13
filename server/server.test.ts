@@ -306,40 +306,61 @@ describe("the server's HTTP API", () => {
     });
   });
 
-  it("answers needs_connection, with the deployment's page, for a caller with no login; once connected, the run runs", async () => {
+  it("answers interrupted when a call needs a login, with the deployment's page; the answer goes on at that call", async () => {
     logins.clear();
     const server = await serve({
       connectUrl: ({ connection, caller }) =>
         `https://dash/connect/${connection.name}?for=${caller.id}`,
     });
-    const needs = await wait_(server, "c", asks("1", "Who am I?", "seller"));
-    expect(needs.status).toBe(200);
-    expect(await needs.json()).toEqual({
-      conversation: "c",
-      runId: "1",
-      status: "needs_connection",
-      connections: [
-        {
-          name: "crm",
-          description: "The CRM, as you.",
-          owner: "user",
-          connectUrl: "https://dash/connect/crm?for=matt",
-        },
-      ],
-    });
-    expect(calls()).toBe(0);
-    logins.set("matt", "matt-at-crm");
     faux.setResponses([
-      fauxAssistantMessage([fauxToolCall("who_am_i", {})], {
+      fauxAssistantMessage([fauxToolCall("who_am_i", {}, { id: "call-1" })], {
         stopReason: "toolUse",
       }),
       fauxAssistantMessage([fauxText("You are matt-at-crm.")]),
     ]);
-    const done = await wait_(server, "c", asks("1", "Who am I?", "seller"));
+    const asked = await wait_(server, "c", asks("1", "Who am I?", "seller"));
+    expect(asked.status).toBe(200);
+    expect(await asked.json()).toEqual({
+      conversation: "c",
+      runId: "1",
+      status: "interrupted",
+      interrupts: [
+        {
+          id: "call-1:connection-crm:0",
+          value: {
+            type: "connection",
+            name: "crm",
+            description: "The CRM, as you.",
+            owner: "user",
+            connectUrl: "https://dash/connect/crm?for=matt",
+          },
+        },
+      ],
+    });
+    expect(calls()).toBe(1);
+    // Busy while it waits: the person answers first.
+    const other = await wait_(server, "c", asks("2", "Hi", "seller"));
+    expect([other.status, await errorOf(other)]).toEqual([422, "busy"]);
+    logins.set("matt", "matt-at-crm");
+    const done = await wait_(server, "c", {
+      agent: "seller",
+      runId: "1",
+      command: { resume: { "call-1:connection-crm:0": "connected" } },
+    });
     expect(await done.json()).toMatchObject({
       status: "done",
       result: "You are matt-at-crm.",
     });
+    expect(calls()).toBe(2);
+    const late = await wait_(server, "c", {
+      agent: "seller",
+      runId: "1",
+      command: { resume: { "call-1:connection-crm:0": "again" } },
+    });
+    expect([late.status, await errorOf(late)]).toEqual([
+      409,
+      "not_interrupted",
+    ]);
   });
 
   it("answers 404 for a route it does not have", async () => {
@@ -370,9 +391,15 @@ describe("the server's operations, for a way in in the same process", () => {
     ).resolves.toEqual({ status: "done", result: "Paris." });
   });
 
-  it("give needs_connection as an outcome, with no link when the deployment gives none", async () => {
+  it("give interrupted as an outcome, with no link when the deployment gives none, and resume with the answers", async () => {
     logins.clear();
     const server = await serve();
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("who_am_i", {}, { id: "call-1" })], {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage([fauxText("You are matt-at-crm.")]),
+    ]);
     await expect(
       server.run(request("matt"), "seller", {
         conversation: "c",
@@ -380,11 +407,27 @@ describe("the server's operations, for a way in in the same process", () => {
         input: "Who am I?",
       }),
     ).resolves.toEqual({
-      status: "needs_connection",
-      connections: [
-        { name: "crm", description: "The CRM, as you.", owner: "user" },
+      status: "interrupted",
+      interrupts: [
+        {
+          id: "call-1:connection-crm:0",
+          value: {
+            type: "connection",
+            name: "crm",
+            description: "The CRM, as you.",
+            owner: "user",
+          },
+        },
       ],
     });
+    logins.set("matt", "matt-at-crm");
+    await expect(
+      server.run(request("matt"), "seller", {
+        conversation: "c",
+        runId: "1",
+        resume: { "call-1:connection-crm:0": null },
+      }),
+    ).resolves.toEqual({ status: "done", result: "You are matt-at-crm." });
   });
 
   it("throw the same refusals, as ServerError with the route's status and code", async () => {

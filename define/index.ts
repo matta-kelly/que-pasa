@@ -4,9 +4,22 @@ export {
   type ConnectionOwner,
   defineConnection,
   isConnection,
+  LoginRejected,
   type ServiceIdentity,
 } from "./connection.ts";
-export { defineMiddleware, type Middleware } from "./middleware.ts";
+export {
+  defineMiddleware,
+  type Middleware,
+  type ToolCallHandler,
+  type ToolCallRequest,
+  type ToolMessage,
+} from "./middleware.ts";
 export { defineResource, type Resource } from "./resource.ts";
 export { defineTool, type Tool } from "./tool.ts";
-export type { Caller, ConversationOf, Json, Runtime } from "./runtime.ts";
+export type {
+  Caller,
+  ConversationOf,
+  Interrupt,
+  Json,
+  Runtime,
+} from "./runtime.ts";

@@ -35,3 +35,9 @@ export type Runtime<C extends Json | undefined = undefined> = {
   /** The conversation's value of a resource the tool declares in `uses`. Any other resource throws. */
   use<T>(resource: Resource<T>): Promise<T>;
 };
+
+/**
+ * A question a run waits on, as LangGraph's `Interrupt`: its id, which an answer names, and its value, what the asker
+ * asked. `error` says why the last answer to it was refused.
+ */
+export type Interrupt = { id: string; value: Json; error?: string };

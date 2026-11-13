@@ -75,11 +75,11 @@ import {
   GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT,
 } from "@opentelemetry/semantic-conventions/incubating";
 import { parseModel } from "../define/index.ts";
+import { jsonSchema } from "./call.ts";
 import {
   type AnyAgent,
   identitiesOf,
   identityText,
-  jsonSchema,
   reminder,
   submitTool,
 } from "./extension.ts";
@@ -104,6 +104,16 @@ export function activeParent(): TraceParent | undefined {
   const span = trace.getSpanContext(otel.active());
   return span && trace.isSpanContextValid(span) ? parentOf(span) : undefined;
 }
+
+/** Marks a moment of a tool call in its trace. */
+export type ToolEvent = (
+  id: ConversationId,
+  callId: string,
+  name: string,
+  attributes: Attributes,
+  reader: DocumentReader,
+  context: Context,
+) => Promise<void>;
 
 /** A segment: this process's invoke_agent span of one run, and its open model and tool spans. */
 type Segment = {
@@ -356,6 +366,15 @@ export function createTracing({
     start(id: ConversationId, runId: string) {
       started.add(keyOf(id, runId));
     },
+    /**
+     * Mark a moment of a tool call on its execute_tool span, such as a question it asks and its answer: never fails the
+     * call.
+     */
+    toolEvent: ((id, callId, name, attributes, reader, context) =>
+      safely(async () => {
+        const segment = await segmentOf(id, reader, context);
+        segment?.tools.get(callId)?.addEvent(name, attributes);
+      })) satisfies ToolEvent,
     /** Settles when the run's segment in this process, if it has one, has ended. */
     async ended(id: ConversationId, runId: string) {
       await (

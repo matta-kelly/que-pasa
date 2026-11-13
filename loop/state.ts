@@ -53,8 +53,23 @@ export type RunState = {
   spent: UsageState;
   /** The parent of each of its trace's segments: the host's span it was started in, or its first segment. */
   trace?: TraceParent;
-  /** Who each of its connections with a `whoami` was logged in as when it started, by the connection's name. */
+  /** Who each of its connections with a `whoami` is logged in as, by the connection's name: at its start, or once connected. */
   identities?: Record<string, ServiceIdentity>;
+  /** Whether someone attends it, to answer what it asks. Absent: nobody does. */
+  attended?: boolean;
+  /** What its tool calls asked, by the question's id: kept, so a call that reruns after a restart finds its answer. */
+  interrupts?: Record<string, Asked>;
+};
+
+/** A question a tool call asked, and its answer once given. */
+export type Asked = {
+  /** The call that asked it. */
+  callId: string;
+  value: Json;
+  /** Absent until answered. */
+  answer?: Json;
+  /** Why the last answer was refused, when it did not fit. */
+  error?: string;
 };
 
 /** A run's document, by its run id. */

@@ -17,11 +17,11 @@ import {
   isConnection,
   type Json,
   type Middleware,
-  type Runtime,
   type ServiceIdentity,
-  type Tool,
 } from "../define/index.ts";
+import { jsonSchema, toPiTool } from "./call.ts";
 import type { Resources } from "./resources.ts";
+import type { ToolEvent } from "./trace.ts";
 import { ConversationDoc, MiddlewareDoc, RunDoc } from "./state.ts";
 import { hasResult, messagesOf, userText } from "./transcript.ts";
 
@@ -49,6 +49,7 @@ export const extensionName = (agent: AnyAgent) => `agent-${agent.name}`;
 export function agentExtension(
   agent: AnyAgent,
   resources: Resources,
+  event: ToolEvent,
 ): Extension {
   const { output } = agent;
   if (output && agent.tools.some((tool) => tool.name === submitTool)) {
@@ -56,7 +57,9 @@ export function agentExtension(
       `agent "${agent.name}": a tool is named "${submitTool}", which its output needs`,
     );
   }
-  const tools = agent.tools.map((tool) => toPiTool(tool, resources));
+  const tools = agent.tools.map((tool) =>
+    toPiTool(tool, agent.middleware ?? [], resources, event),
+  );
   if (output) tools.push(submit(output));
   return defineExtension({
     name: extensionName(agent),
@@ -175,33 +178,6 @@ function sectionOf(middleware: Middleware): PromptSection {
   };
 }
 
-/** A que-pasa tool as a pi tool: pi checks the arguments against the JSON Schema, zod parses them, and the run's runtime goes in. */
-function toPiTool(
-  tool: Tool<z.ZodObject, Json | undefined>,
-  resources: Resources,
-) {
-  return definePiTool({
-    name: tool.name,
-    description: tool.description,
-    parameters: jsonSchema(tool.schema),
-    ...(tool.replay ? { replay: tool.replay } : {}),
-    execute: async (args, api, context) => {
-      const result = await tool.run(
-        tool.schema.parse(args),
-        await runtimeOf(tool, resources, api, context),
-      );
-      return {
-        output: [
-          {
-            type: "text",
-            text: typeof result === "string" ? result : JSON.stringify(result),
-          },
-        ],
-      };
-    },
-  });
-}
-
 /** The submit tool: a result that fails the schema throws, and the model gets the error to try again. A good one is kept in the transcript, as the result's details, and ends the run. */
 function submit(output: z.ZodObject) {
   return definePiTool({
@@ -232,43 +208,3 @@ const remind = hook(GenerationTask, {
     return sent < reminders ? { continue: reminder } : undefined;
   },
 });
-
-/** The runtime of the call, from its conversation's document: its caller, its context, and the resources the tool uses. */
-async function runtimeOf(
-  tool: Tool<z.ZodObject, Json | undefined>,
-  resources: Resources,
-  api: DocumentReader & { readonly conversationId: ConversationId },
-  context: Context,
-): Promise<Runtime<Json | undefined>> {
-  const kept = await api.snapshot(ConversationDoc, api.conversationId, context);
-  if (!kept) throw new Error("the conversation has no document");
-  const { conversation, caller, context: given } = kept;
-  const of = {
-    conversation,
-    caller,
-    ...(given === undefined ? {} : { context: given }),
-  };
-  const uses = new Set((tool.uses ?? []).map((resource) => resource.name));
-  return {
-    caller,
-    context: given,
-    use: async (resource) => {
-      if (!uses.has(resource.name)) {
-        throw new Error(
-          `tool "${tool.name}" uses resource "${resource.name}", which it does not declare in uses`,
-        );
-      }
-      return resources.use(of, resource);
-    },
-  };
-}
-
-/**
- * The JSON Schema of what the model must give: the input shape, so a field with a default is not required. Without the
- * `$schema` key a tool's parameters do not take.
- */
-export function jsonSchema(schema: z.ZodObject): object {
-  const json: Record<string, unknown> = z.toJSONSchema(schema, { io: "input" });
-  delete json["$schema"];
-  return json;
-}
