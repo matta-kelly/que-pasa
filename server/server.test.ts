@@ -10,6 +10,7 @@ import { z } from "zod";
 import {
   type Caller,
   defineAgent,
+  defineConnection,
   defineTool,
   type Runtime,
 } from "../define/index.ts";
@@ -61,6 +62,30 @@ const judge = defineAgent({
   tools: [],
   output: z.object({ verdict: z.enum(["done", "raise"]) }),
 });
+/** A service each caller logs into with their own token. */
+const crm = defineConnection({
+  name: "crm",
+  description: "The CRM, as you.",
+  owner: "user",
+  credential: z.object({ token: z.string() }),
+  connect: ({ token }) => ({ who: token }),
+});
+const whoAmI = defineTool({
+  name: "who_am_i",
+  description: "Say who the CRM knows you as.",
+  schema: z.object({}),
+  uses: [crm],
+  run: async (_input, runtime) => (await runtime.use(crm)).who,
+});
+const seller = defineAgent({
+  name: "seller",
+  model,
+  instructions: "Sell.",
+  tools: [whoAmI],
+});
+/** The CRM logins the deployment holds, by caller. */
+const logins = new Map<string, string>();
+
 const secret = defineAgent({
   name: "secret",
   model,
@@ -89,7 +114,11 @@ async function serve(
   loop = await openRuntime({
     storage: new MemoryStorage(),
     models,
-    agents: [geo, judge, secret],
+    agents: [geo, judge, secret, seller],
+    credentialFor: ({ caller }) => {
+      const token = logins.get(caller.id);
+      return token ? { token } : undefined;
+    },
   });
   return createServer({
     runtime: loop,
@@ -98,7 +127,7 @@ async function serve(
       return id ? { id } : undefined;
     },
     agentsFor: (caller: Caller) =>
-      caller.id === "matt" ? [geo, judge] : [geo],
+      caller.id === "matt" ? [geo, judge, seller] : [geo],
     onError: () => {},
     ...options,
   });
@@ -150,6 +179,7 @@ describe("the server's HTTP API", () => {
       agents: [
         { name: "geo", description: "Answers questions about places." },
         { name: "judge" },
+        { name: "seller" },
       ],
     });
   });
@@ -276,6 +306,42 @@ describe("the server's HTTP API", () => {
     });
   });
 
+  it("answers needs_connection, with the deployment's page, for a caller with no login; once connected, the run runs", async () => {
+    logins.clear();
+    const server = await serve({
+      connectUrl: ({ connection, caller }) =>
+        `https://dash/connect/${connection.name}?for=${caller.id}`,
+    });
+    const needs = await wait_(server, "c", asks("1", "Who am I?", "seller"));
+    expect(needs.status).toBe(200);
+    expect(await needs.json()).toEqual({
+      conversation: "c",
+      runId: "1",
+      status: "needs_connection",
+      connections: [
+        {
+          name: "crm",
+          description: "The CRM, as you.",
+          owner: "user",
+          connectUrl: "https://dash/connect/crm?for=matt",
+        },
+      ],
+    });
+    expect(calls()).toBe(0);
+    logins.set("matt", "matt-at-crm");
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("who_am_i", {})], {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage([fauxText("You are matt-at-crm.")]),
+    ]);
+    const done = await wait_(server, "c", asks("1", "Who am I?", "seller"));
+    expect(await done.json()).toMatchObject({
+      status: "done",
+      result: "You are matt-at-crm.",
+    });
+  });
+
   it("answers 404 for a route it does not have", async () => {
     const server = await serve();
     const none = await server.fetch(
@@ -302,6 +368,23 @@ describe("the server's operations, for a way in in the same process", () => {
         input: "Capital of France?",
       }),
     ).resolves.toEqual({ status: "done", result: "Paris." });
+  });
+
+  it("give needs_connection as an outcome, with no link when the deployment gives none", async () => {
+    logins.clear();
+    const server = await serve();
+    await expect(
+      server.run(request("matt"), "seller", {
+        conversation: "c",
+        runId: "1",
+        input: "Who am I?",
+      }),
+    ).resolves.toEqual({
+      status: "needs_connection",
+      connections: [
+        { name: "crm", description: "The CRM, as you.", owner: "user" },
+      ],
+    });
   });
 
   it("throw the same refusals, as ServerError with the route's status and code", async () => {

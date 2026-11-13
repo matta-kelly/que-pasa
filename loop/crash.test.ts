@@ -173,6 +173,12 @@ describe("a run killed at a crash point and opened again in a new process", () =
     expect(seen.calls).toBe(1);
   });
 
+  it("killed mid tool: the new process connects the connection again, from the deployment's login", async () => {
+    const seen = await crashAndResume("connection");
+    expect(seen.value).toEqual(done);
+    expect(seen.ran).toEqual(["crash-test in first", "crash-test in second"]);
+  });
+
   it("killed after its submit: gives back the kept result, with no model call", async () => {
     const seen = await crashAndResume("after-submit");
     expect(seen.value).toEqual(done);

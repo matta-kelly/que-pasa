@@ -29,6 +29,7 @@ import {
 import { z } from "zod";
 import {
   defineAgent,
+  defineConnection,
   defineResource,
   defineTool,
   type Runtime,
@@ -44,7 +45,8 @@ type Scenario =
   | "resource"
   | "memory"
   | "after-submit"
-  | "second-run";
+  | "second-run"
+  | "connection";
 const [scenario, phase, file, log, spans] = process.argv.slice(2) as [
   Scenario,
   "first" | "second",
@@ -100,6 +102,14 @@ const submit = fauxAssistantMessage(
 /** What the host provides each run: resolved from the context the run was started with, and named by this process. */
 const tag = defineResource<string>("tag");
 
+/** A connection the step tool reads through, in the connection scenario: connected by the process that runs the tool. */
+const notes = defineConnection({
+  name: "notes",
+  owner: "user",
+  credential: z.object({ token: z.string() }),
+  connect: ({ token }) => ({ who: `${token} in ${phase}` }),
+});
+
 /**
  * The step tool: it logs each run of itself with the context its run was given, or in the resource scenario with the
  * run's resource, and in the first phase waits there.
@@ -108,15 +118,20 @@ const step = defineTool({
   name: "step",
   description: "Do the step.",
   schema: z.object({}),
-  uses: [tag],
+  uses: [tag, notes],
   ...(scenario === "safe-tool" ||
   scenario === "resource" ||
-  scenario === "memory"
+  scenario === "memory" ||
+  scenario === "connection"
     ? { replay: "safe" as const }
     : {}),
   run: async (_input, runtime: Runtime<{ tag: string }>) => {
     const seen =
-      scenario === "resource" ? await runtime.use(tag) : runtime.context.tag;
+      scenario === "resource"
+        ? await runtime.use(tag)
+        : scenario === "connection"
+          ? (await runtime.use(notes)).who
+          : runtime.context.tag;
     appendFileSync(log, `${seen}\n`);
     return phase === "first" ? crashPoint() : "stepped";
   },
@@ -194,6 +209,11 @@ faux.setResponses(
           }),
         ],
         "after-submit": [submit],
+        connection: [
+          fauxAssistantMessage([fauxToolCall("step", {})], {
+            stopReason: "toolUse",
+          }),
+        ],
         "second-run": [
           fauxAssistantMessage(
             [fauxToolCall("submit", { verdict: "raise", note: "first run" })],
@@ -216,6 +236,8 @@ const runtime = await openRuntime({
       ({ context }) => `${(context as { tag: string }).tag} in ${phase}`,
     ),
   ],
+  // The caller's login, from the deployment: never kept, so each process asks for it again.
+  credentialFor: ({ caller }) => ({ token: caller.id }),
 });
 let messages: Message[] = [];
 const go = (runId: string, model?: string) =>

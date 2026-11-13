@@ -16,6 +16,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
   defineAgent,
+  defineConnection,
   defineMiddleware,
   defineTool,
   type Middleware,
@@ -351,6 +352,60 @@ describe("a run's trace", () => {
       "Capital of France?",
     );
     expect(second?.attributes["gen_ai.output.messages"]).toContain("Rome.");
+  });
+
+  it("never holds a connection's login, with content captured", async () => {
+    const { faux, models, model } = scripted();
+    const crm = defineConnection({
+      name: "crm",
+      owner: "user",
+      credential: z.object({ token: z.string() }),
+      connect: ({ token }) => ({ rows: token.length }),
+    });
+    const count = defineTool({
+      name: "count_rows",
+      description: "Count the CRM's rows.",
+      schema: z.object({}),
+      uses: [crm],
+      run: async (_input, runtime) => `${(await runtime.use(crm)).rows} rows`,
+    });
+    const agent = defineAgent({
+      name: "counter",
+      model,
+      instructions: "Count.",
+      tools: [count],
+    });
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("count_rows", {})], {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage([fauxText("Done.")]),
+    ]);
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [agent],
+      captureContent: true,
+      credentialFor: () => ({ token: "tok-very-secret" }),
+    });
+    try {
+      await runtime.run(agent, "Count.", {
+        conversation: "chat-1",
+        runId: "run-1",
+        caller,
+      });
+    } finally {
+      await runtime.close();
+    }
+    const spans = exporter.getFinishedSpans();
+    expect(JSON.stringify(spans.map((span) => span.attributes))).toContain(
+      "15 rows",
+    );
+    expect(
+      JSON.stringify(
+        spans.map((span) => ({ a: span.attributes, e: span.events })),
+      ),
+    ).not.toContain("tok-very-secret");
   });
 
   it("gives an agent one version on one model, and another when what it is changes", () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
   defineAgent,
+  defineConnection,
   defineMiddleware,
   defineResource,
   defineTool,
@@ -169,4 +170,49 @@ describe("defineMiddleware", () => {
       expect(() => defineMiddleware({ name })).toThrow("kebab-case");
     },
   );
+});
+
+describe("defineConnection", () => {
+  const login = z.object({ apiKey: z.string() });
+  const odoo = defineConnection({
+    name: "odoo",
+    description: "Odoo, as the caller.",
+    owner: "user",
+    credential: login,
+    connect: ({ apiKey }) => ({ key: apiKey.length }),
+  });
+
+  it("gives back a connection, a resource a tool lists in uses", async () => {
+    expect(odoo).toMatchObject({
+      name: "odoo",
+      kind: "connection",
+      owner: "user",
+    });
+    expect(await odoo.connect({ apiKey: "abc" })).toEqual({ key: 3 });
+    const tool = defineTool({
+      name: "read_partners",
+      description: "Read partners.",
+      schema: z.object({}),
+      uses: [odoo],
+      run: () => "ok",
+    });
+    expect(tool.uses).toEqual([odoo]);
+  });
+
+  it("refuses a name that is not kebab-case, an owner it does not know, and an empty description", () => {
+    const base = {
+      owner: "user" as const,
+      credential: login,
+      connect: () => 1,
+    };
+    expect(() => defineConnection({ ...base, name: "Odoo" })).toThrow(
+      "kebab-case",
+    );
+    expect(() =>
+      defineConnection({ ...base, name: "odoo", owner: "agent" as "user" }),
+    ).toThrow('the owner must be "user" or "shared"');
+    expect(() =>
+      defineConnection({ ...base, name: "odoo", description: " " }),
+    ).toThrow("the description is empty");
+  });
 });

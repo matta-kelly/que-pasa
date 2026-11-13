@@ -44,7 +44,7 @@ What is written in a workspace's own repo, with que-pasa's `define`: its agents,
 
 - agents (`defineAgent`): what is delivered. A package can deliver agents
 	- its core: a name (kebab-case), a model (`provider:model-id`), instructions, the tools it may call and no others, and the shape of its result. With none, it answers in text
-	- it acts as the caller, with each person's own login, or as itself, with its own. Not built: today every tool gets the caller, and connections are not resolved
+	- it acts as the caller, with each person's own login, or with a shared one, through the connections its tools use ([[define-tool#Reaching an outside system]])
 	- context scope and lifecycle are settings, not kinds of agent: a chat agent keeps one conversation, a worker one task, an ephemeral one one call. A conversation keeps its history across runs ([[que-pasa-loop#Conversation and run]]); a host picks the scope by its conversation key
 	- middleware ([[que-pasa-middleware]]): optional behaviours on its loop, each separate, in LangChain's shape. Built: the primitive, with the hooks memory needs, and memory. Approval, summarize and call limits are not built
 - what an agent is built from
@@ -52,9 +52,9 @@ What is written in a workspace's own repo, with que-pasa's `define`: its agents,
 		- ready-made: the file and command tools of [[que-pasa-sandbox]], which act in the sandbox the host gives each conversation
 	- memory: files the model always reads, loaded once when a conversation is made and kept in it, picked by `memory({ backend, sources })` in the agent's middleware, after Deep Agents' `MemoryMiddleware`. A file of `memory/` can serve any agent; the role's note links what its agent loads. Read only: the agent does not edit it
 	- skills: packaged know-how for one kind of task, a folder with `SKILL.md` (the Agent Skills format). The agent sees each skill's name and description at start, and reads the rest when a task matches. Not built
-	- connections: a resource that links to one outside service, whose login the workspace names. Not built
-		- owned by a user: each person authorizes their own account once, and the run that first needs it pauses and asks
-		- owned by the agent: one credential, used for every caller
+	- connections (`defineConnection`): a resource that links to one outside service through a login, which its tools list in `uses` ([[define-tool#Reaching an outside system]])
+		- owned by a user: each person connects their own account once, in the deployment's control plane; a run whose caller has not is refused at its start, with the page to connect it
+		- shared: one login for the deployment, which its control plane lets some callers use
 - what an agent is proven by: tests, eval cases beside the capability they check. Every agent is developed against its cases and proven by them. Not built
 - who is given which agents: teams, a group of people and the agents they are given. Everyone in a team can run its agents; one person is a team of one. Not built
 
@@ -92,4 +92,4 @@ What crosses between que-pasa and the outside.
 	- a case lives in the workspace's tests; running one is a run started through invocation, as any host would, with the case and experiment ids on the host's own span
 	- scores and labels are eval2's own records, keyed by trace and span id, and can go out as `gen_ai.evaluation.result` events through the same export
 	- seeding a case's starting state is per domain (Odoo, a repo), and stays outside que-pasa
-- target systems (Odoo and others) are reached by tools, with a connection's login. Not built
+- target systems (Odoo and others) are reached by tools, through a connection: the workspace defines it, the deployment's control plane holds its logins and gives them with `credentialFor`

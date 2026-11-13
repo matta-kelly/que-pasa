@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
   defineAgent,
+  defineConnection,
   defineMiddleware,
   defineResource,
   defineTool,
@@ -19,6 +20,8 @@ import { MemoryStorage } from "@earendil-works/pi-durable";
 import type { Models } from "@earendil-works/pi-ai";
 import type { Json, Agent } from "../define/index.ts";
 import {
+  ConnectionsMissing,
+  type CredentialFor,
   openRuntime,
   provide,
   RunFailed,
@@ -1497,5 +1500,186 @@ describe("a run's end", () => {
     );
     expect(failed).toBeInstanceOf(RunFailed);
     expect((failed as RunFailed).reason).toBe("no_submit");
+  });
+});
+
+describe("a run's connections", () => {
+  /** A fake notes service: a login is a token, and the connection reads the notes of whoever it is logged in as. */
+  const notes = defineConnection({
+    name: "notes",
+    description: "The team's notes.",
+    owner: "user",
+    credential: z.object({ token: z.string().startsWith("tok-") }),
+    connect: ({ token }) => ({ who: token.slice("tok-".length) }),
+  });
+  const stats = defineConnection({
+    name: "stats",
+    owner: "shared",
+    credential: z.object({ token: z.string() }),
+    connect: ({ token }) => ({ who: token }),
+  });
+  const read = (connection: typeof notes, name: string) =>
+    defineTool({
+      name,
+      description: `Read through ${connection.name}.`,
+      schema: z.object({}),
+      uses: [connection],
+      run: async (_input, runtime) =>
+        `${connection.name} of ${(await runtime.use(connection)).who}`,
+    });
+  const readNotes = read(notes, "read_notes");
+  const readStats = read(stats, "read_stats");
+
+  /** A runtime whose agent reads through `tools`, with the deployment's logins, and what its tools gave the model. */
+  async function setup(
+    credentialFor: CredentialFor | undefined,
+    tools = [readNotes],
+  ) {
+    const { faux, models, model } = scripted();
+    const agent = defineAgent({
+      name: "reader",
+      model,
+      instructions: "Read.",
+      tools,
+    });
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [agent],
+      ...(credentialFor ? { credentialFor } : {}),
+    });
+    const reads = () =>
+      faux.setResponses([
+        fauxAssistantMessage(
+          tools.map((tool) => fauxToolCall(tool.name, {})),
+          { stopReason: "toolUse" },
+        ),
+        fauxAssistantMessage([fauxText("Read.")]),
+      ]);
+    return { faux, agent, runtime, reads };
+  }
+  const results = (messages: Message[]) =>
+    messages.flatMap((m) =>
+      m.role === "toolResult" ? [JSON.stringify(m.content)] : [],
+    );
+
+  it("gives a tool the connection made from its caller's own login, and never the login", async () => {
+    const logins: Record<string, string> = { matt: "tok-matt", sam: "tok-sam" };
+    const { agent, runtime, reads } = await setup(({ caller }) => {
+      const token = logins[caller.id];
+      return token ? { token } : undefined;
+    });
+    const seen: string[] = [];
+    let messages: Message[] = [];
+    try {
+      for (const who of ["matt", "sam"]) {
+        reads();
+        await runtime.run(agent, "Read.", {
+          conversation: who,
+          runId: "1",
+          caller: { id: who },
+          onMessages: (all) => (messages = all),
+        });
+        seen.push(...results(messages));
+      }
+    } finally {
+      await runtime.close();
+    }
+    expect(seen).toEqual([
+      expect.stringContaining("notes of matt"),
+      expect.stringContaining("notes of sam"),
+    ]);
+    expect(JSON.stringify(messages)).not.toContain("tok-");
+  });
+
+  it("gives a shared login to each caller the deployment allows", async () => {
+    const allowed = new Set(["matt", "sam"]);
+    const { agent, runtime, reads } = await setup(
+      ({ caller }) =>
+        allowed.has(caller.id) ? { token: "analytics" } : undefined,
+      [readStats],
+    );
+    const seen: string[] = [];
+    try {
+      for (const who of ["matt", "sam"]) {
+        reads();
+        await runtime.run(agent, "Read.", {
+          conversation: who,
+          runId: "1",
+          caller: { id: who },
+          onMessages: (all) => seen.push(...results(all)),
+        });
+      }
+      const refused = await runtime
+        .run(agent, "Read.", {
+          conversation: "kim",
+          runId: "1",
+          caller: { id: "kim" },
+        })
+        .catch((error: unknown) => error);
+      expect(refused).toBeInstanceOf(ConnectionsMissing);
+    } finally {
+      await runtime.close();
+    }
+    expect(seen).toEqual([
+      expect.stringContaining("stats of analytics"),
+      expect.stringContaining("stats of analytics"),
+    ]);
+  });
+
+  it("refuses a run whose caller has no login, before anything runs or is kept; once connected, the same run runs", async () => {
+    let token: string | undefined;
+    const { faux, agent, runtime, reads } = await setup(() =>
+      token ? { token } : undefined,
+    );
+    const go = () =>
+      runtime.run(agent, "Read.", { conversation: "c", runId: "1", caller });
+    try {
+      const refused = await go().catch((error: unknown) => error);
+      expect(refused).toBeInstanceOf(ConnectionsMissing);
+      expect((refused as ConnectionsMissing).reason).toBe("needs_connection");
+      expect(
+        (refused as ConnectionsMissing).connections.map((c) => c.name),
+      ).toEqual(["notes"]);
+      expect(faux.state.callCount).toBe(0);
+      token = "tok-matt";
+      reads();
+      await expect(go()).resolves.toBe("Read.");
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("refuses a login that does not fit its credential, naming where and not what", async () => {
+    const { agent, runtime } = await setup(() => ({ token: "secret-123" }));
+    try {
+      const failed = await runtime
+        .run(agent, "Read.", { conversation: "c", runId: "1", caller })
+        .catch((error: unknown) => error as Error);
+      expect((failed as Error).message).toMatch(
+        /notes.*does not fit its credential at token/,
+      );
+      expect((failed as Error).message).not.toContain("secret-123");
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("refuses at open an agent whose tools use a connection when the runtime has no credentialFor", async () => {
+    await expect(setup(undefined)).rejects.toThrow(
+      'tool "read_notes" uses connection "notes", and the runtime has no credentialFor',
+    );
+  });
+
+  it("refuses a connection given with provide: its logins come from credentialFor", async () => {
+    const { models } = scripted();
+    await expect(
+      openRuntime({
+        storage: new MemoryStorage(),
+        models,
+        agents: [],
+        resources: [provide(notes, () => ({ who: "x" }))],
+      }),
+    ).rejects.toThrow('resource "notes" is a connection');
   });
 });

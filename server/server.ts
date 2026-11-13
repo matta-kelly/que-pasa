@@ -8,8 +8,19 @@ import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { stream } from "hono/streaming";
 import { z } from "zod";
-import type { Agent, Caller, Json } from "../define/index.ts";
-import { RunFailed, RunRefused, type Runtime } from "../loop/index.ts";
+import type {
+  Agent,
+  Caller,
+  Connection,
+  ConnectionOwner,
+  Json,
+} from "../define/index.ts";
+import {
+  ConnectionsMissing,
+  RunFailed,
+  RunRefused,
+  type Runtime,
+} from "../loop/index.ts";
 
 /** Any agent, as a deployment gives it. */
 type AnyAgent = Agent<z.ZodObject | undefined, Json | undefined>;
@@ -62,8 +73,25 @@ export type ServerOptions = {
     conversation: string;
     request: Request;
   }) => Json | undefined | Promise<Json | undefined>;
+  /**
+   * Where a person connects a connection: the deployment's page, from its control plane. Given with a run that needs a
+   * login the caller has not given; left out, none is.
+   */
+  connectUrl?: (request: {
+    connection: Connection;
+    caller: Caller;
+  }) => string | undefined | Promise<string | undefined>;
   /** Where an error the server did not expect is reported; `console.error` by default. */
   onError?: (error: unknown) => void;
+};
+
+/** A connection a caller has to connect before the run starts. */
+export type ConnectionNeeded = {
+  name: string;
+  description?: string;
+  owner: ConnectionOwner;
+  /** The deployment's page to connect it, when it has one. */
+  connectUrl?: string;
 };
 
 /** An agent as a caller sees it. Its input is always one text message. */
@@ -78,7 +106,9 @@ export type RunRequest = { conversation: string; runId: string; input: string };
  */
 export type RunOutcome =
   | { status: "done"; result: unknown }
-  | { status: "failed"; error: { code: string; message: string } };
+  | { status: "failed"; error: { code: string; message: string } }
+  /** The run did not start: the caller has no login for these connections. Once they connect, the same run id runs. */
+  | { status: "needs_connection"; connections: ConnectionNeeded[] };
 
 /** How a client in the same process follows a run. */
 export type RunControl = {
@@ -121,6 +151,7 @@ export function createServer({
   authenticate,
   agentsFor,
   contextFor,
+  connectUrl,
   onError = (error) => console.error(error),
 }: ServerOptions): Server {
   async function callerOf(request: Request) {
@@ -190,9 +221,32 @@ export function createServer({
     try {
       await Promise.race([started, running]);
     } catch (error) {
+      if (error instanceof ConnectionsMissing) {
+        return { outcome: needed(error.connections, caller) };
+      }
       throw refusalOf(error, conversation);
     }
     return { outcome: outcomeOf(running, signal, onKeepAlive) };
+  }
+
+  /** The connections a caller has to connect, each with the deployment's page for it. */
+  async function needed(
+    connections: readonly Connection[],
+    caller: Caller,
+  ): Promise<RunOutcome> {
+    const needs: ConnectionNeeded[] = [];
+    for (const connection of connections) {
+      const url = await connectUrl?.({ connection, caller });
+      needs.push({
+        name: connection.name,
+        ...(connection.description === undefined
+          ? {}
+          : { description: connection.description }),
+        owner: connection.owner,
+        ...(url === undefined ? {} : { connectUrl: url }),
+      });
+    }
+    return { status: "needs_connection", connections: needs };
   }
 
   async function outcomeOf(

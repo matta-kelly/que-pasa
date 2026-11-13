@@ -1,6 +1,6 @@
 ---
 type: component
-description: "A que-pasa tool: a function an agent can call, written once in a workspace, which gets what it acts on (a sandbox, a login) from its run as a resource and never holds it. Read for what a tool is, how it reaches an outside system safely, how a run calls it, and what is not built: connections and approvals."
+description: "A que-pasa tool: a function an agent can call, written once in a workspace, which gets what it acts on (a sandbox, a login) from its run as a resource and never holds it. Read for what a tool is, how it reaches an outside system safely, through a resource or a connection, how a run calls it, and what is not built: approvals."
 status: running
 ---
 A function an agent can call: written once in a workspace, so any agent in it can be given it. The code is `defineTool`, in `define/tool.ts`.
@@ -35,7 +35,13 @@ A tool reaches what it acts on through a resource, which the host gives each con
 	- a tool names the resources it uses in `uses`, and asks for one with `runtime.use(resource)`; any other throws
 	- the host provides each one when it opens the runtime: `provide(resource, (conversation) => value)`, from the conversation's key, caller and context. A tool that uses one the host does not provide fails the runtime's open, never a run
 	- the value is resolved once per run in a process, from the conversation as its first run made it: every run on it, also one that resumes in a new process, gets the same one
-- a connection is a resource that holds a login: the conversation's caller's, or the agent's own. A tool never holds a credential, and none enters the model's context. Not built: no connection resolves a login yet
+- connection (`defineConnection`, `define/connection.ts`): a resource that links to one outside service through a login, after LangChain's connections and que v1's connectors
+	- its owner: `user`, each caller's own login, so the agent acts as them with their rights; or `shared`, one login for the deployment, which its control plane lets some callers use
+	- its `credential`: the login's shape (zod), and `connect`, which turns a login into the connection a tool acts through, such as a logged-in client. The tool gets the connection with `runtime.use`, never the login, and no login enters the model's context, the storage or a trace
+	- a tool lists it in `uses`, as any resource; an agent's connections are the ones its tools use
+	- the deployment hands over the logins, from its control plane: `openRuntime({ credentialFor })`, for a connection and a caller. A tool that uses a connection, on a runtime with none, fails the runtime's open
+	- the gate: a run checks at its start that its caller has every login its agent's tools use, as LangChain's credential gate before the first model turn. One missing refuses the run before anything of it is kept (`ConnectionsMissing`); the server answers `needs_connection`, with the deployment's page to connect it ([[que-pasa-server]])
+	- not built: `whoami` (telling the model who a connection is logged in as), and asking for a login mid-run, when a tool first needs it, which needs the durable interrupt
 - permissions are held at the tool and at the target system, never trusted to the agent
 	- hiding a tool keeps an agent on task; the login, or the sandbox's wall, keeps it safe
 

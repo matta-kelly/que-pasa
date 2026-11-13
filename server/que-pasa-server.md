@@ -21,7 +21,7 @@ A process on the network that starts runs for whoever calls: for each request it
 	- who is calling: `authenticate(request)`, the caller, or none (401). LangGraph's `@auth.authenticate`
 	- which agents they get: `agentsFor(caller)`. LangGraph's `@auth.on`
 	- what context a conversation is made with: `contextFor({ caller, agent, conversation, request })`, none when left out. A request never sets the context; a deployment that lets a client ask for something reads the request in this hook, and throws `Refused` (403) for what it does not allow
-	- which login a tool acts with: not built, the next change (connections)
+	- which login a tool acts with: `credentialFor`, given to the runtime ([[define-tool#Reaching an outside system]]); and where a person connects one: `connectUrl({ connection, caller })`, the deployment's page
 - the model is the agent's
 - what each part owns:
 	- que-pasa: the routes, the checks, the run, the answer
@@ -55,6 +55,7 @@ A process on the network that starts runs for whoever calls: for each request it
 - once admitted: 200 at once, a newline each second while the run goes on, then `{ conversation, runId, status, ... }`. Leading newlines are valid JSON, and keep a proxy, such as Cloudflare's 100-second limit, from cutting a long run (LangGraph's `waitKeepAlive`)
 	- `status: "done"`, with `result`: the agent's text, or its output
 	- `status: "failed"`, with `error: { code, message }`: `no_submit`, or pi's reason
+	- `status: "needs_connection"`, with `connections: [{ name, description, owner, connectUrl }]`: the run did not start, as its caller has no login for these. Once they connect, the same `runId` runs
 	- more statuses come with run life, such as a run that waits for an approval, so a client checks `status`
 - a client that hangs up does not stop the run: it is durable, and the same `runId` again gives back its result
 
@@ -62,7 +63,7 @@ A process on the network that starts runs for whoever calls: for each request it
 
 The same two, for a way in in the same process, such as an MCP layer: each answers the deployment's questions from the request first, as the routes do.
 - `agents(request)`: the caller's agents, as `{ name, description }`
-- `run(request, agent, { conversation, runId, input }, { signal, onKeepAlive })`: the run's outcome, `{ status: "done", result }` or `{ status: "failed", error }`
+- `run(request, agent, { conversation, runId, input }, { signal, onKeepAlive })`: the run's outcome, `{ status: "done", result }`, `{ status: "failed", error }` or `{ status: "needs_connection", connections }`
 	- a refusal throws `ServerError`, with the route's status and code
 	- `signal`: stops the run when it aborts, which then ends `failed` with `aborted`. Left out, the run goes on whatever the client does
 	- `onKeepAlive`: called each second while the run goes on, for a client that must show it is alive, such as an MCP progress notification

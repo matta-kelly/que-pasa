@@ -60,6 +60,29 @@ const reviewer = defineAgent({
 
 What middleware is, and how memory works: `middleware/que-pasa-middleware.md`.
 
+A tool reaches an outside service through a connection: the workspace says what it is and whose login it uses, and the deployment hands over the logins from its control plane. A tool gets the connection, never the login, and a run whose caller has not connected is refused at its start:
+
+```ts
+import { defineConnection, defineTool } from "@mku1tra/que-pasa/define";
+
+const odoo = defineConnection({
+  name: "odoo", owner: "user",                       // each person's own login; "shared" for one login
+  credential: z.object({ url: z.string(), db: z.string(), apiKey: z.string() }),
+  connect: (login) => odooClient(login),             // what tools act through
+});
+const readPartners = defineTool({
+  name: "read_partners", description, schema, uses: [odoo],
+  run: async (input, runtime) => (await runtime.use(odoo)).search("res.partner", input),
+});
+
+const runtime = await openRuntime({
+  storage, models, agents,
+  credentialFor: ({ connection, caller }) => controlPlane.login(connection.name, caller.id), // undefined: none
+});
+```
+
+How connections work: `define/define-tool.md`.
+
 Each run is traced as OpenTelemetry GenAI spans through `@opentelemetry/api`. To keep them, register an SDK (a tracer provider, an exporter, and an async context manager). To add what only the host knows, call `runtime.run()` inside a span of its own. `captureContent: true` on `openRuntime` adds message content.
 
 ## Serve agents

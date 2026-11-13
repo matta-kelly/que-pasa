@@ -1,6 +1,23 @@
-import type { ConversationOf, Resource } from "../define/index.ts";
+import {
+  type Caller,
+  type Connection,
+  type ConversationOf,
+  isConnection,
+  type Json,
+  type Resource,
+} from "../define/index.ts";
 
 export type { ConversationOf };
+
+/**
+ * The deployment's logins, from its control plane: for a `user` connection the caller's own, for a `shared` one the one
+ * login when the caller may use it, or undefined when there is none. que-pasa keeps no login: it asks each time a run
+ * starts, and again when a tool first needs the connection in a process.
+ */
+export type CredentialFor = (request: {
+  connection: Connection;
+  caller: Caller;
+}) => Json | undefined | Promise<Json | undefined>;
 
 /** The host's value of one resource, per conversation. */
 export type Provider<T = unknown> = {
@@ -21,22 +38,74 @@ export function provide<T>(
 
 /**
  * The host's providers, and each conversation's resolved values: resolved once per conversation while a run on it goes
- * on in this process.
+ * on in this process. A connection's value is resolved from the deployment's login for the conversation's caller,
+ * through its own `connect`.
  */
-export function createResources(providers: readonly Provider[]) {
+export function createResources(
+  providers: readonly Provider[],
+  credentialFor: CredentialFor | undefined,
+) {
   const byName = new Map<string, Provider>();
   for (const provider of providers) {
     const { name } = provider.resource;
     if (byName.has(name))
       throw new Error(`resource "${name}" is provided twice`);
+    if (isConnection(provider.resource))
+      throw new Error(
+        `resource "${name}" is a connection: the deployment gives its logins with credentialFor, not provide`,
+      );
     byName.set(name, provider);
   }
+
+  /**
+   * The caller's login for a connection, checked against its credential; undefined when the deployment has none. A login
+   * that does not fit throws: the deployment's control plane holds a wrong one.
+   */
+  async function loginOf(connection: Connection, caller: Caller) {
+    const login = await credentialFor?.({ connection, caller });
+    if (login === undefined) return undefined;
+    const checked = connection.credential.safeParse(login);
+    if (!checked.success) {
+      // The paths only: the login's values never go in a message.
+      const paths = checked.error.issues.map(
+        (issue) => issue.path.join(".") || "(the login)",
+      );
+      throw new Error(
+        `connection "${connection.name}": the login for "${caller.id}" does not fit its credential at ${paths.join(", ")}`,
+      );
+    }
+    return { credential: checked.data as unknown };
+  }
+
+  /** The connection's provider: the caller's login, checked, then connected. */
+  const connected = (connection: Connection): Provider => ({
+    resource: connection,
+    async resolve({ caller }) {
+      const login = await loginOf(connection, caller);
+      if (!login) {
+        throw new Error(
+          `connection "${connection.name}": there is no login for "${caller.id}"`,
+        );
+      }
+      return connection.connect(login.credential);
+    },
+  });
+  const providerOf = (resource: Resource) =>
+    isConnection(resource) ? connected(resource) : byName.get(resource.name);
   const resolved = new Map<string, Map<string, Promise<unknown>>>();
 
   return {
     /** Throws when a resource a tool uses has no provider: at open, never in a run. */
     check(uses: readonly { tool: string; resource: Resource }[]) {
       for (const { tool, resource } of uses) {
+        if (isConnection(resource)) {
+          if (!credentialFor) {
+            throw new Error(
+              `tool "${tool}" uses connection "${resource.name}", and the runtime has no credentialFor`,
+            );
+          }
+          continue;
+        }
         if (!byName.has(resource.name)) {
           throw new Error(
             `tool "${tool}" uses resource "${resource.name}", which is not provided`,
@@ -46,7 +115,7 @@ export function createResources(providers: readonly Provider[]) {
     },
     /** The conversation's value of a resource. */
     use<T>(of: ConversationOf, resource: Resource<T>): Promise<T> {
-      const provider = byName.get(resource.name);
+      const provider = providerOf(resource);
       if (!provider)
         throw new Error(`resource "${resource.name}" is not provided`);
       const values =
@@ -67,6 +136,17 @@ export function createResources(providers: readonly Provider[]) {
         values.set(resource.name, value);
       }
       return value as Promise<T>;
+    },
+    /**
+     * The connections of `connections` the caller has no login for: a run that needs one does not start. A login that does
+     * not fit its credential throws.
+     */
+    async missing(caller: Caller, connections: readonly Connection[]) {
+      const missing: Connection[] = [];
+      for (const connection of connections) {
+        if (!(await loginOf(connection, caller))) missing.push(connection);
+      }
+      return missing;
     },
     /** Drop a conversation's values, when its run ends. */
     forget(conversation: string) {

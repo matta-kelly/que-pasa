@@ -21,12 +21,18 @@ import type { z } from "zod";
 import {
   type Agent,
   type Caller,
+  type Connection,
+  isConnection,
   type Json,
   parseModel,
 } from "../define/index.ts";
-import { RunFailed, RunRefused } from "./errors.ts";
+import { ConnectionsMissing, RunFailed, RunRefused } from "./errors.ts";
 import { type AnyAgent, agentExtension, submitTool } from "./extension.ts";
-import { createResources, type Provider } from "./resources.ts";
+import {
+  createResources,
+  type CredentialFor,
+  type Provider,
+} from "./resources.ts";
 import {
   ConversationDoc,
   ConversationIndex,
@@ -59,6 +65,11 @@ export type RuntimeOptions = {
    * resumes after a restart, gets the same one.
    */
   resources?: readonly Provider[];
+  /**
+   * The deployment's logins, for the connections the agents' tools use: from its control plane, for a caller. Needed
+   * when any tool uses a connection. que-pasa keeps none: a run asks at its start, and a tool's first use in a process.
+   */
+  credentialFor?: CredentialFor;
   /**
    * Record message content in the trace: instructions, tool definitions, messages, tool arguments and results. Off by
    * default, as the GenAI conventions say: content can hold sensitive data.
@@ -128,9 +139,10 @@ export async function openRuntime({
   models,
   agents,
   resources: providers = [],
+  credentialFor,
   captureContent = false,
 }: RuntimeOptions): Promise<Runtime> {
-  const resources = createResources(providers);
+  const resources = createResources(providers, credentialFor);
   resources.check(
     agents.flatMap((agent) =>
       agent.tools.flatMap((tool) =>
@@ -160,6 +172,32 @@ export async function openRuntime({
   const harness = await Harness.open(storage, { models, registry }, context);
   tracing.bind(harness);
   harness.resume();
+
+  /** Whether the run is admitted already: a run started again goes on, and is not gated again. */
+  async function admitted(key: string, runId: string) {
+    const made = await harness.snapshot(ConversationIndex, key, context);
+    const id = made?.conversationId;
+    if (id == null) return false;
+    const had = await harness.commit(
+      (tx) => tx.submissionByRequest(id, runId),
+      context,
+    );
+    return had !== undefined;
+  }
+
+  /**
+   * The credential gate, as LangChain's before the first model turn: a run whose caller has no login for a connection
+   * its agent's tools use is refused before anything of it is kept.
+   */
+  async function gate(agent: AnyAgent, caller: Caller) {
+    const missing = await resources.missing(caller, connectionsOf(agent));
+    if (missing.length === 0) return;
+    const names = missing.map((connection) => `"${connection.name}"`);
+    throw new ConnectionsMissing(
+      missing,
+      `agent "${agent.name}": "${caller.id}" has no login for ${names.join(", ")}`,
+    );
+  }
 
   /**
    * The conversation of a key: made with its agent, its document and its middleware's state in one commit, or the one
@@ -277,6 +315,7 @@ export async function openRuntime({
     } = options;
     const model = options.model ?? agent.model;
     parseModel(model);
+    if (!(await admitted(key, runId))) await gate(entry.agent, caller);
     const parent = activeParent();
     const conversation = await conversationOf(agent, entry.extension, {
       conversation: key,
@@ -330,6 +369,17 @@ export async function openRuntime({
       resources.clear();
     },
   };
+}
+
+/** The connections the agent's tools use, each once, in the order its tools name them. */
+function connectionsOf(agent: AnyAgent): Connection[] {
+  const byName = new Map<string, Connection>();
+  for (const tool of agent.tools) {
+    for (const resource of tool.uses ?? []) {
+      if (isConnection(resource)) byName.set(resource.name, resource);
+    }
+  }
+  return [...byName.values()];
 }
 
 /** Refuse a run that gives a conversation another agent, caller or context than its first run made it with. */

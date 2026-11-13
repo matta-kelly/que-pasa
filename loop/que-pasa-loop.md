@@ -82,6 +82,8 @@ What holds in every state of every run. Each is held by construction, and checke
 | a finished step is never done twice | pi's checkpoint per step; a tool not marked `replay: "safe"` never runs again | `crash.test.ts`: mid tool, mid model request, after the submit |
 | a run keeps what it was started with: input and model | the run document and the model, written once, in the commit that admits the run | `runtime.test.ts`, `crash.test.ts`: a run started again keeps its model, also mid a conversation's second run |
 | a conversation keeps the middleware state it was made with: its system prompt is the same in every run and every process | each `beforeAgent` result kept in a `MiddlewareDoc`, in the commit that makes the conversation; a section renders from it, never from memory | `crash.test.ts`: the memory file changed, and the resumed process's model gets the text the run started with |
+| a run starts only when its caller has every login its agent's tools use | the credential gate in `runtime.run`, before anything of the run is kept; a run admitted already skips it | `runtime.test.ts`: a caller with no login refused, then the same run once connected |
+| a login is never kept | a connection resolves from `credentialFor` in the process, as any resource; never in a document, the transcript or a span | `runtime.test.ts`, `trace.test.ts`: the login in no message and no span, with content captured; `crash.test.ts`: the new process asks for it again |
 | a conversation's tools get the same resources in every process | a provider resolves from the conversation document, never from memory; once per run in a process | `crash.test.ts`: the resumed process resolves from the stored context |
 | a run's result, usage and trace are its own, not the conversation's | the result read from the run's submission; the usage from what the conversation had spent at each admission; a segment per run | `runtime.test.ts`, `trace.test.ts`: two runs on one conversation |
 | the result is the run's last submit that passed the schema | the submit tool parses with zod before it keeps the result; a failed parse goes back to the model; the reminder counts only the run's own entries | `runtime.test.ts`: a bad submit, then a good one; a second run reminded though the first submitted |
@@ -107,7 +109,7 @@ One runtime per process owns its storage: `openRuntime({ storage, models, agents
 
 A run gives back its result, its usage, its conversation and its trace.
 - its result: the output its submit gave, or its answer as text. `signal` stops a run: the conversation is aborted, and `run` rejects with the signal's reason
-	- a refusal before the run is admitted: `RunRefused`, with its reason: `other_agent`, `other_caller`, `other_context` or `busy`. Nothing of the run is kept
+	- a refusal before the run is admitted: `RunRefused`, with its reason: `other_agent`, `other_caller`, `other_context`, `busy`, or `needs_connection` (`ConnectionsMissing`, with the connections the caller has no login for). Nothing of the run is kept
 	- `onStarted`: called once the run is admitted, or found admitted; after it, `run` gives the result or `RunFailed`, never `RunRefused`. The server waits for it to answer 200 ([[que-pasa-server]])
 	- a run that ended with no result: `RunFailed`, with pi's reason, or `no_submit`
 - its usage: `onUsage`, once, answered or not: what the run spent, tokens and cost per `provider/model-id`, and per tool
