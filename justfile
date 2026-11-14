@@ -5,9 +5,8 @@
 default:
     @just --list
 
-# Run the check set: notes, then types, lint and format. The pre-push hook and the server's check run the same file.
+# Run the check set: notes, then types, lint and format. crate's merge queue runs the same file.
 check: up
-    git -C "{{justfile_directory()}}" config core.hooksPath .githooks
     crate run scripts/check.sh
 
 # Run a command in the workspace, from the repo folder: `just run npm install zod`

@@ -6,7 +6,7 @@ image = "dev"     # the check runs in the dev image, [dev] below
 ship = "npm"      # each move of main publishes the versions its commits ask for
 
 [dev]             # the dev image: the files its hash covers
-inputs = [".devcontainer/Containerfile", "package-lock.json"]
+inputs = [".crate/Containerfile", "package-lock.json"]
 
 [tools]           # the dev image with the checkout: where commands run
 volumes = ["node_modules"]

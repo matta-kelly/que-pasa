@@ -4,10 +4,10 @@ que-v2's harness, on pi-durable: a workspace defines its agents with `@mku1tra/q
 
 ## Run and check
 
-Node runs in this checkout's workspace, never on the host. crate (github.com/matta-kelly/crate) makes the workspace from `crate.toml`: its tools member runs the dev image, `ghcr.io/matta-kelly/que-pasa-dev:<hash>`, which `.devcontainer/Containerfile` builds with the npm cache of `package-lock.json`, and the `dev-image` workflow on main builds and pushes it. You need `just`, `podman` and crate; once per machine, log in with `podman login ghcr.io`, and the first `just up` pulls the dev image, then installs from its cache in seconds.
+Node runs in this checkout's workspace, never on the host. crate (github.com/matta-kelly/crate) makes the workspace from `crate.toml`: its tools member runs the dev image, `ghcr.io/matta-kelly/que-pasa-dev:<hash>`, which `.crate/Containerfile` builds with the npm cache of `package-lock.json`, and the `dev-image` workflow on main builds and pushes it. You need `just`, `podman` and crate; once per machine, log in with `podman login ghcr.io`, and the first `just up` pulls the dev image, then installs from its cache in seconds.
 
 - `just up`: make or start this checkout's workspace
-- `just check`: the check set, `scripts/check.sh`: notes, then types, lint, format, tests and the build. The pre-push hook and the pipeline run the same file
+- `just check`: the check set, `scripts/check.sh`: notes, then types, lint, format, tests and the build. crate's merge queue runs the same file
 - `just run <command>`: run a command in the workspace, such as `just run npm install zod`
 - `just down`: remove this checkout's workspace: its containers, volumes and network
 

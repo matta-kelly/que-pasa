@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The smoke check of que-pasa's dev image (.devcontainer/Containerfile), run on the image before any
+# The smoke check of que-pasa's dev image (.crate/Containerfile), run on the image before any
 # push (crate dev-image ensure). The image owes it this: the checkout installs from its npm cache
 # with no network, and it holds no checkout file. It installs into a copy in the container's /tmp,
 # never into the checkout.

@@ -9,7 +9,7 @@ on:
     branches: [main]
     paths:
       - crate.toml
-      - .devcontainer/Containerfile
+      - .crate/Containerfile
       - package-lock.json
       - scripts/dev-image-smoke.sh
       - .github/workflows/dev-image.yml
