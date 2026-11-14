@@ -13,11 +13,17 @@ import {
   type ConversationId,
   configure,
   createRegistry,
+  type Cursor,
+  type EntryQuery,
+  type EntryRecord,
   type Extension,
   Harness,
   LiveDoc,
   type LiveState,
+  type Page,
+  type RunFailureReason,
   type SettledSubmissionRecord,
+  StorageRequestError,
   type DocumentReader,
   type Storage,
   type Submission,
@@ -52,6 +58,7 @@ import {
 } from "./resources.ts";
 import {
   type Asked,
+  CallerIndex,
   ConversationDoc,
   InterruptsDoc,
   ConversationIndex,
@@ -62,7 +69,7 @@ import {
   runGoingOn,
 } from "./state.ts";
 import { activeParent, createTracing } from "./trace.ts";
-import { answerText, messagesOf, outcomeOf } from "./transcript.ts";
+import { answerText, entriesOf, messagesOf, outcomeOf } from "./transcript.ts";
 import { usageOf } from "./usage.ts";
 
 /** The tokens and cost a run spent: per `provider/model-id` for model calls, and per tool for tools that report it. */
@@ -91,6 +98,41 @@ export type WhenBusy = "reject" | "followUp" | "steer";
  * on the run's id. The run goes on from the calls that asked.
  */
 export type Resume = { resume: Record<string, Json> };
+
+/**
+ * How a conversation stands, LangGraph's thread status: `busy` while a run goes on, `interrupted` while it waits on
+ * questions someone can answer, `error` when its newest run ended with no answer, `idle` otherwise.
+ */
+export type ConversationStatus = "idle" | "busy" | "interrupted" | "error";
+
+/** A conversation as a client reads it, LangGraph's thread: what its first run made it with, and how it stands. */
+export type ConversationInfo = {
+  /** The host's key for it. */
+  conversation: string;
+  /** The agent it runs. */
+  agent: string;
+  /** Who it acts for. */
+  caller: Caller;
+  /** Absent when it was made with none. */
+  context?: Json;
+  status: ConversationStatus;
+  /** The run going on, when it is `busy` or `interrupted`: answers to its questions go on it, as `{ resume }`. */
+  runId?: string;
+  /** The questions it waits on, when it is `interrupted`; none otherwise. */
+  interrupts: Interrupt[];
+  /** Why its newest run ended with no answer, when it is `error`: pi's `runFailure`. */
+  runFailure?: { reason: RunFailureReason; detail?: string };
+};
+
+/** Which of a caller's conversations to read, and from where: the newest first. */
+export type ConversationsOptions = {
+  /** Only the conversations of these agents. Left out, those of every agent. */
+  agents?: readonly string[];
+  /** At most this many; 20 when left out. */
+  limit?: number;
+  /** Where the page before ended: its `next`. */
+  cursor?: Cursor;
+};
 
 /** What a runtime needs: where it keeps its conversations, the models it may call, and every agent it can run. */
 export type RuntimeOptions = {
@@ -175,14 +217,31 @@ export type RunOptions<C extends Json | undefined> = {
 export type Runtime = {
   /**
    * Run one input on a conversation until it is done or waits on a question, or go on with the run of this `runId`, with
-   * answers to its questions in place of the input. A conversation takes one run at a time: a run while another goes on,
-   * or waits, is refused.
+   * answers to its questions in place of the input. A run while another goes on, or waits, goes by its `whenBusy`.
    */
   run<O extends z.ZodObject | undefined, C extends Json | undefined>(
     agent: Agent<O, C>,
     input: string | Resume,
     options: RunOptions<C>,
   ): Promise<RunOutcome<RunResult<O>>>;
+  /** The conversation of a host key, and how it stands; undefined when no run made it. */
+  conversation(key: string): Promise<ConversationInfo | undefined>;
+  /**
+   * A page of a conversation's entries, pi's transcript records, as pi's `entries()` gives them (newest first unless
+   * `query.order` is `ascending`), without its system entries; undefined when no run made it. `next` continues the scan
+   * with the same query, and pi's `ConversationTranscript` pages it as it pages pi's own.
+   */
+  entries(
+    key: string,
+    query: Omit<EntryQuery, "conversationId">,
+    limit: number,
+    cursor?: Cursor,
+  ): Promise<Page<EntryRecord, Cursor> | undefined>;
+  /** A caller's conversations, the newest made first, a page at a time: `next` gives the page after. */
+  conversations(
+    caller: Caller,
+    options?: ConversationsOptions,
+  ): Promise<Page<ConversationInfo, Cursor>>;
   /** Close the harness. A run still going is kept, and goes on when a runtime opens on the same storage. */
   close(): Promise<void>;
 };
@@ -329,6 +388,10 @@ export async function openRuntime({
         extensions: [extension, tracing.extension],
       });
       Object.assign(await tx.doc(ConversationDoc, id), given, { runs: [] });
+      (await tx.doc(CallerIndex, given.caller.id, null)).conversations.push({
+        conversation: key,
+        agent: given.agent,
+      });
       for (const { name, state } of states) {
         (await tx.doc(MiddlewareDoc, id, name, state)).state = state;
       }
@@ -649,13 +712,128 @@ export async function openRuntime({
     );
   }
 
+  /** The conversation id of a host key, when a run made it. */
+  async function idOf(key: string) {
+    const made = await harness.snapshot(ConversationIndex, key, context);
+    return made?.conversationId ?? undefined;
+  }
+
+  async function conversation(key: string) {
+    const id = await idOf(key);
+    return id === undefined ? undefined : infoOf(harness, id);
+  }
+
+  async function entries(
+    key: string,
+    query: Omit<EntryQuery, "conversationId">,
+    limit: number,
+    cursor?: Cursor,
+  ) {
+    checkLimit(limit);
+    const id = await idOf(key);
+    if (id === undefined) return undefined;
+    const kept = await harness.conversation(id, context);
+    if (!kept)
+      throw new Error(`conversation "${key}": it is missing from storage`);
+    return entriesOf(kept, query, limit, cursor, context);
+  }
+
+  async function conversations(
+    caller: Caller,
+    { agents, limit = 20, cursor }: ConversationsOptions = {},
+  ): Promise<Page<ConversationInfo, Cursor>> {
+    checkLimit(limit);
+    const made =
+      (await harness.snapshot(CallerIndex, caller.id, context))
+        ?.conversations ?? [];
+    const of = ({ agent }: { agent: string }) =>
+      agents === undefined || agents.includes(agent);
+    // The list only grows, so a position in it is where a page ends: the newest first, from the end.
+    let at = made.length;
+    if (cursor !== undefined) {
+      const { before } = cursor;
+      if (
+        typeof before !== "number" ||
+        !Number.isSafeInteger(before) ||
+        before < 0 ||
+        before > made.length
+      )
+        throw new StorageRequestError("Invalid conversations cursor");
+      at = before;
+    }
+    const items: ConversationInfo[] = [];
+    while (at > 0 && items.length < limit) {
+      const listed = made[--at]!;
+      if (!of(listed)) continue;
+      const id = await idOf(listed.conversation);
+      if (id === undefined)
+        throw new Error(
+          `conversation "${listed.conversation}": it is missing from storage`,
+        );
+      items.push(await infoOf(harness, id));
+    }
+    return made.slice(0, at).some(of)
+      ? { items, next: { before: at } }
+      : { items };
+  }
+
   return {
     run,
+    conversation,
+    entries,
+    conversations,
     async close() {
       await tracing.closeAll();
       await harness.close(context);
       resources.clear();
     },
+  };
+}
+
+/** A page's size: a whole number, 1 or more. */
+function checkLimit(limit: number) {
+  if (!Number.isSafeInteger(limit) || limit < 1)
+    throw new RangeError(
+      `limit must be a whole number of 1 or more, not ${limit}`,
+    );
+}
+
+/** A conversation as a client reads it: what its first run made it with, and how it stands now. */
+async function infoOf(
+  reader: DocumentReader,
+  id: ConversationId,
+): Promise<ConversationInfo> {
+  const kept = await reader.snapshot(ConversationDoc, id, context);
+  if (!kept) throw new Error(`conversation ${id}: its document is missing`);
+  const live = (await reader.snapshot(LiveDoc, id, context)) ?? {};
+  const made = {
+    conversation: kept.conversation,
+    agent: kept.agent,
+    caller: kept.caller,
+    ...(kept.context === undefined ? {} : { context: kept.context }),
+  };
+  if (live.run === undefined) {
+    const failure = live.runFailure;
+    return failure === undefined
+      ? { ...made, status: "idle", interrupts: [] }
+      : {
+          ...made,
+          status: "error",
+          interrupts: [],
+          runFailure: {
+            reason: failure.reason,
+            ...(failure.detail === undefined ? {} : { detail: failure.detail }),
+          },
+        };
+  }
+  const runId = await runGoingOn(reader, id, context);
+  const asked = (await reader.snapshot(InterruptsDoc, id, context))?.asked;
+  const waiting = paused(asked ?? {}, live);
+  return {
+    ...made,
+    status: waiting ? "interrupted" : "busy",
+    ...(runId === undefined ? {} : { runId }),
+    interrupts: waiting ?? [],
   };
 }
 

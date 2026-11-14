@@ -24,7 +24,7 @@ await runtime.close();
 // first: { status: "done", result } or { status: "interrupted", interrupts }
 ```
 
-A conversation keeps its history across runs: the second run's model has the first's messages. Each run is one input to its own result, usage and trace; a conversation takes one run at a time, and every run on it gives the same agent, caller and context. An input while a run goes on is refused by default; `whenBusy: "followUp"` queues it to run after, and `whenBusy: "steer"` joins it to the run going on, at its next step (pi's `whenBusy`).
+A conversation keeps its history across runs: the second run's model has the first's messages. Each run is one input to its own result, usage and trace; a conversation takes one run at a time, and every run on it gives the same agent, caller and context. An input while a run goes on is refused by default; `whenBusy: "followUp"` queues it to run after, and `whenBusy: "steer"` joins it to the run going on, at its next step (pi's `whenBusy`). A host reads what it keeps: `runtime.conversations(caller)` lists a caller's conversations, newest first; `runtime.conversation(key)` says how one stands (`idle`, `busy`, `interrupted` with its questions, or `error`); `runtime.entries(key, query, limit)` pages its entries, pi's transcript records, without the system prompt.
 
 A tool call can stop to ask a person, as LangGraph's `interrupt()`. A run someone attends (`attended: true`) then gives back `interrupted`, with its questions, and goes on at that call once answered, as LangGraph's `Command(resume)`; a run nobody attends, the default, fails with the question before the tool acts:
 
@@ -126,7 +126,7 @@ const server = createServer({
 serve({ fetch: server.fetch, port: 8080 });
 ```
 
-It answers `GET /ok`, `GET /agents`, and `POST /conversations/{conversation}/runs/wait` with `{ agent, runId, input }`, or `{ agent, runId, command: { resume } }` to answer a run's questions, after LangGraph's Agent Server. A way in in the same process, such as an MCP layer, calls `server.agents(request)` and `server.run(request, agent, { conversation, runId, input })`, or `{ conversation, runId, resume }`. Its runs are attended: a run that asks gives back `interrupted`, with its questions. The routes, the refusals and a long run: `server/que-pasa-server.md`.
+It answers `GET /ok`, `GET /agents`, and `POST /conversations/{conversation}/runs/wait` with `{ agent, runId, input }`, or `{ agent, runId, command: { resume } }` to answer a run's questions, after LangGraph's Agent Server. A client reads its history with `GET /conversations` (its conversations, newest first), `GET /conversations/{conversation}` (how one stands: its status, the run going on and the questions it waits on) and `GET /conversations/{conversation}/entries` (pi's transcript records, a page at a time). A way in in the same process, such as an MCP layer, calls `server.agents(request)` and `server.run(request, agent, { conversation, runId, input })`, or `{ conversation, runId, resume }`, and `server.conversations`, `server.conversation` and `server.entries`. Its runs are attended: a run that asks gives back `interrupted`, with its questions. The routes, the refusals and a long run: `server/que-pasa-server.md`.
 
 ## Use it from another project
 

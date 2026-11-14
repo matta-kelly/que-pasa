@@ -1,6 +1,9 @@
 export {
   type AgentInfo,
+  type ConversationInfo,
+  type ConversationsQuery,
   createServer,
+  type EntriesQuery,
   Refused,
   type RunControl,
   type RunOutcome,

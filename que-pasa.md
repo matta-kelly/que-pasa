@@ -67,12 +67,13 @@ What is written in a workspace's own repo, with que-pasa's `define`: its agents,
 - a run's life: it starts from an input, moves through model and tool calls, and ends with an answer or a submit. The conversation's next run starts from a new input, with the whole history
 - what keeps it right: durability, so a finished step is never done twice and a person is never asked twice; middleware, whose state a conversation keeps, so every run on it, also one that resumes, has what it was made with; approval, a person's yes before a gated call. Limits are not built
 - what it leaves: its result, usage, conversation, and its trace, which is what evals read
+- what a client reads: a caller's conversations, how one stands (its status, the run going on and its questions), and its entries, pi's transcript records without the system prompt ([[que-pasa-loop#Reading a conversation]])
 
 ## Host
 
 How a workspace's agents are reached: a process that runs them.
 - today a host wires `loop/` itself: storage, models, its agents, the resources their tools use (such as each conversation's sandbox), the OTel SDK, and starting again the runs a restart left. Assembly is one
-- server ([[que-pasa-server]]): a host that starts runs for callers outside its process, after LangGraph's Agent Server. It asks the deployment who is calling, which agents they get and what context a conversation has, then runs the agent. Its HTTP API lists the caller's agents and runs an input on a conversation; its operations serve a way in in the same process. L&L is its first deployment
+- server ([[que-pasa-server]]): a host that starts runs for callers outside its process, after LangGraph's Agent Server. It asks the deployment who is calling, which agents they get and what context a conversation has, then runs the agent. Its HTTP API lists the caller's agents, runs an input on a conversation, and reads the caller's conversations and their entries; its operations serve a way in in the same process. L&L is its first deployment
 - a standard host, which does that wiring by convention for any workspace: not built
 	- storage in the deployment's data folder, and models from env
 	- traces: it starts the OpenTelemetry SDK, which reads OTel's own `OTEL_*` variables, so a deployment points its traces at Langfuse, a collector or any backend with no code. With none set, OTLP JSON files in a known folder of the data folder: the one part que-pasa writes
@@ -84,7 +85,7 @@ How a workspace's agents are reached: a process that runs them.
 
 What crosses between que-pasa and the outside.
 - a workspace's repo, and a host, import `@mku1tra/que-pasa/define`, `/loop`, `/middleware`, `/sandbox` and `/server`, by its published version on npm. zod is a peer
-- a host gives storage, models, agents and resources, and gets results, usage and conversations
+- a host gives storage, models, agents and resources, and gets results, usage, and conversations it can read: a caller's list, how one stands, and its entries
 - a server ([[que-pasa-server]]): que-pasa ships the routes, the checks and the run; the deployment answers who is calling, which agents they get and what context a conversation has, from its own control plane, and serves it on its box
 - a sandbox ([[que-pasa-sandbox]]): que-pasa ships the backends, the view and the tools; the host gives each conversation its backend, and sets the policy: image, mounts, network, read-only, view
 - spans go out through `@opentelemetry/api` only. The host owns the SDK and where spans go; it records what only it knows on its own span and calls `run()` inside it. Every segment of a run, also after a crash, is in that trace

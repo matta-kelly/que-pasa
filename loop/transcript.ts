@@ -1,12 +1,13 @@
 import type { Context } from "@earendil-works/chord/context";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
-import type {
-  Cursor,
-  EntryId,
-  EntryQuery,
-  EntryRecord,
-  Page,
-  SettledSubmissionRecord,
+import {
+  type Cursor,
+  type EntryId,
+  type EntryQuery,
+  type EntryRecord,
+  type Page,
+  type SettledSubmissionRecord,
+  SystemEntry,
 } from "@earendil-works/pi-durable";
 
 /** A reader of one conversation's raw history: a conversation, or a hook's api. */
@@ -56,6 +57,34 @@ export async function messagesOf(
   ))
     all.push(message);
   return all;
+}
+
+/**
+ * A page of the conversation's entries, as pi's `entries()` gives it, without its system entries: the instructions and
+ * the tool definitions are the deployment's, not the client's. The page is filled to `limit` while the scan has more, and
+ * `next` is pi's cursor, set only while it does, so pi's `ConversationTranscript` pages it as it pages pi's own.
+ */
+export async function entriesOf(
+  reader: Entries,
+  query: Omit<EntryQuery, "conversationId">,
+  limit: number,
+  cursor: Cursor | undefined,
+  context: Context,
+): Promise<Page<EntryRecord, Cursor>> {
+  const items: EntryRecord[] = [];
+  let next = cursor;
+  do {
+    // Never more than the page has room for, so pi's cursor continues right after the last entry given.
+    const page = await reader.entries(
+      query,
+      limit - items.length,
+      next,
+      context,
+    );
+    items.push(...page.items.filter((entry) => !SystemEntry.is(entry)));
+    next = page.next;
+  } while (next !== undefined && items.length < limit);
+  return next === undefined ? { items } : { items, next };
 }
 
 /** The text of a user message. */

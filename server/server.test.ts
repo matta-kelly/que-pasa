@@ -409,6 +409,222 @@ describe("the server's HTTP API", () => {
   });
 });
 
+/** GET a route as a caller, or as nobody with `null`. */
+const get = (server: Server, path: string, caller: string | null = "matt") =>
+  server.fetch(
+    new Request(`http://que${path}`, { headers: caller ? as(caller) : {} }),
+  );
+
+describe("the server's history routes", () => {
+  /** One answered run on a conversation. */
+  async function answered(
+    server: Server,
+    conversation: string,
+    agent = "geo",
+    caller = "matt",
+  ) {
+    faux.setResponses([fauxAssistantMessage([fauxText("Paris.")])]);
+    await (
+      await wait_(server, conversation, asks("1", "Hi", agent), caller)
+    ).json();
+  }
+
+  it("list the caller's conversations of the agents they are given, newest first, a page at a time by next", async () => {
+    let given = ["geo", "judge", "seller"];
+    const all = [geo, judge, secret, seller];
+    const server = await serve({
+      agentsFor: (caller) =>
+        caller.id === "matt"
+          ? all.filter((agent) => given.includes(agent.name))
+          : [geo],
+    });
+    await answered(server, "a");
+    await answered(server, "b", "seller");
+    await answered(server, "c");
+    await answered(server, "s", "geo", "sam");
+    const first = await get(server, "/conversations?limit=2");
+    const page = (await first.json()) as {
+      items: { conversation: string }[];
+      next: string;
+    };
+    expect(page.items).toEqual([
+      { conversation: "c", agent: "geo", status: "idle", interrupts: [] },
+      { conversation: "b", agent: "seller", status: "idle", interrupts: [] },
+    ]);
+    const second = await get(
+      server,
+      `/conversations?limit=2&cursor=${page.next}`,
+    );
+    expect(await second.json()).toEqual({
+      items: [
+        { conversation: "a", agent: "geo", status: "idle", interrupts: [] },
+      ],
+    });
+    const geoOnly = await get(server, "/conversations?agent=geo");
+    expect(
+      (
+        (await geoOnly.json()) as { items: { conversation: string }[] }
+      ).items.map((c) => c.conversation),
+    ).toEqual(["c", "a"]);
+    // An agent the caller is no longer given: its conversations are not listed, and not found.
+    given = ["geo"];
+    const now = await get(server, "/conversations");
+    expect(
+      ((await now.json()) as { items: { conversation: string }[] }).items.map(
+        (c) => c.conversation,
+      ),
+    ).toEqual(["c", "a"]);
+    const gone = await get(server, "/conversations/b");
+    expect([gone.status, await errorOf(gone)]).toEqual([
+      404,
+      "conversation_not_found",
+    ]);
+  });
+
+  it("refuse a bad query (400), an agent not given (404), and a caller not known (401)", async () => {
+    const server = await serve();
+    await answered(server, "a");
+    for (const query of [
+      "limit=0",
+      "limit=101",
+      "limit=two",
+      "cursor=nope",
+      "cursor=eyJiZWZvcmUiOjl9",
+      "other=1",
+    ]) {
+      const bad = await get(server, `/conversations?${query}`);
+      expect([query, bad.status, await errorOf(bad)]).toEqual([
+        query,
+        400,
+        "bad_request",
+      ]);
+    }
+    const hidden = await get(server, "/conversations?agent=secret");
+    expect([hidden.status, await errorOf(hidden)]).toEqual([
+      404,
+      "agent_not_found",
+    ]);
+    for (const path of [
+      "/conversations",
+      "/conversations/a",
+      "/conversations/a/entries",
+    ]) {
+      const none = await get(server, path, null);
+      expect([none.status, await errorOf(none)]).toEqual([
+        401,
+        "unauthenticated",
+      ]);
+    }
+  });
+
+  it("read one of the caller's conversations; another caller's, and one no run made, are not found", async () => {
+    const server = await serve();
+    await answered(server, "cl-42/geo");
+    const read = await get(
+      server,
+      `/conversations/${encodeURIComponent("cl-42/geo")}`,
+    );
+    expect(await read.json()).toEqual({
+      conversation: "cl-42/geo",
+      agent: "geo",
+      status: "idle",
+      interrupts: [],
+    });
+    for (const [path, caller] of [
+      ["/conversations/cl-42%2Fgeo", "sam"],
+      ["/conversations/none", "matt"],
+      ["/conversations/cl-42%2Fgeo/entries", "sam"],
+      ["/conversations/none/entries", "matt"],
+    ] as const) {
+      const hidden = await get(server, path, caller);
+      expect([path, hidden.status, await errorOf(hidden)]).toEqual([
+        path,
+        404,
+        "conversation_not_found",
+      ]);
+    }
+  });
+
+  it("read a conversation that waits on a login: the run to answer on, and its question with the deployment's page", async () => {
+    logins.clear();
+    const server = await serve({
+      connectUrl: ({ connection, caller }) =>
+        `https://dash/connect/${connection.name}?for=${caller.id}`,
+    });
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("who_am_i", {}, { id: "call-1" })], {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage([fauxText("You are matt-at-crm.")]),
+    ]);
+    const asked = (await (
+      await wait_(server, "c", asks("1", "Who am I?", "seller"))
+    ).json()) as { interrupts: unknown[] };
+    const read = await get(server, "/conversations/c");
+    expect(await read.json()).toEqual({
+      conversation: "c",
+      agent: "seller",
+      status: "interrupted",
+      runId: "1",
+      interrupts: asked.interrupts,
+    });
+    const listed = await get(server, "/conversations");
+    expect(await listed.json()).toEqual({
+      items: [
+        {
+          conversation: "c",
+          agent: "seller",
+          status: "interrupted",
+          runId: "1",
+          interrupts: asked.interrupts,
+        },
+      ],
+    });
+  });
+
+  it("read a conversation's entries, pi's records without the system entries, newest first, a page at a time by next", async () => {
+    const server = await serve();
+    await answered(server, "c");
+    type Entries = { items: { id: number; kind: string }[]; next?: string };
+    const all = (await (
+      await get(server, "/conversations/c/entries?order=ascending")
+    ).json()) as Entries;
+    expect(all.items.map((entry) => entry.kind)).toEqual([
+      "pi.user",
+      "pi.assistant",
+    ]);
+    expect(all.next).toBeUndefined();
+    const newest = (await (
+      await get(server, "/conversations/c/entries?limit=1")
+    ).json()) as Entries;
+    expect(newest.items).toEqual([all.items[1]]);
+    const before = (await (
+      await get(
+        server,
+        `/conversations/c/entries?limit=1&cursor=${newest.next}`,
+      )
+    ).json()) as Entries;
+    expect(before).toEqual({ items: [all.items[0]] });
+    const bounded = (await (
+      await get(
+        server,
+        `/conversations/c/entries?maxEntryId=${all.items[0]!.id}`,
+      )
+    ).json()) as Entries;
+    expect(bounded).toEqual({ items: [all.items[0]] });
+    const otherOrder = await get(
+      server,
+      `/conversations/c/entries?order=ascending&cursor=${newest.next}`,
+    );
+    expect([otherOrder.status, await errorOf(otherOrder)]).toEqual([
+      400,
+      "bad_request",
+    ]);
+    const badId = await get(server, "/conversations/c/entries?minEntryId=-1");
+    expect(badId.status).toBe(400);
+  });
+});
+
 describe("the server's operations, for a way in in the same process", () => {
   const request = (caller?: string) =>
     new Request("http://que/mcp", { headers: caller ? as(caller) : {} });
@@ -484,6 +700,43 @@ describe("the server's operations, for a way in in the same process", () => {
       status: 404,
       code: "agent_not_found",
     });
+  });
+
+  it("read the caller's conversations and entries as the routes do, with pi's cursors, and the same refusals", async () => {
+    const server = await serve();
+    faux.setResponses([fauxAssistantMessage([fauxText("Paris.")])]);
+    await server.run(request("matt"), "geo", {
+      conversation: "c",
+      runId: "1",
+      input: "Capital of France?",
+    });
+    const info = {
+      conversation: "c",
+      agent: "geo",
+      status: "idle",
+      interrupts: [],
+    };
+    await expect(server.conversations(request("matt"))).resolves.toEqual({
+      items: [info],
+    });
+    await expect(server.conversation(request("matt"), "c")).resolves.toEqual(
+      info,
+    );
+    const newest = await server.entries(request("matt"), "c", { limit: 1 });
+    expect(newest.items.map((entry) => entry.kind)).toEqual(["pi.assistant"]);
+    const before = await server.entries(request("matt"), "c", {
+      limit: 1,
+      cursor: newest.next!,
+    });
+    expect(before).toEqual({
+      items: [expect.objectContaining({ kind: "pi.user" })],
+    });
+    await expect(
+      server.conversation(request("sam"), "c"),
+    ).rejects.toMatchObject({ status: 404, code: "conversation_not_found" });
+    await expect(
+      server.conversations(request("matt"), { limit: 101 }),
+    ).rejects.toMatchObject({ status: 400, code: "bad_request" });
   });
 
   it("call onKeepAlive while a run goes on, and stop the run when the client's signal aborts", async () => {

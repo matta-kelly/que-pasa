@@ -13,6 +13,9 @@ export {
   type Provider,
 } from "./resources.ts";
 export {
+  type ConversationInfo,
+  type ConversationsOptions,
+  type ConversationStatus,
   openRuntime,
   type Resume,
   type RunOptions,

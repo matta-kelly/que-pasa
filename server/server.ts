@@ -4,6 +4,13 @@
  * the deployment's runtime. Its HTTP API is LangGraph's routes in pi's words; its operations serve a way in that lives in
  * the same process, such as an MCP layer.
  */
+import {
+  type Cursor,
+  type EntryId,
+  type EntryRecord,
+  type Page,
+  StorageRequestError,
+} from "@earendil-works/pi-durable";
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { stream } from "hono/streaming";
@@ -18,6 +25,7 @@ import {
 } from "../define/index.ts";
 import {
   type ConnectionQuestion,
+  type ConversationInfo as Kept,
   RunFailed,
   RunRefused,
   type Runtime,
@@ -124,6 +132,36 @@ export type RunControl = {
   onKeepAlive?: () => void;
 };
 
+/**
+ * A conversation as a client reads it, LangGraph's thread: its agent, how it stands (`idle`, `busy`, `interrupted` or
+ * `error`), the run going on, the questions it waits on, and why its newest run failed. Who it acts for and its context
+ * are the deployment's, and not given.
+ */
+export type ConversationInfo = Omit<Kept, "caller" | "context">;
+
+/** Which of the caller's conversations to read: the newest first, a page at a time. */
+export type ConversationsQuery = {
+  /** Only this agent's. Left out, those of every agent the caller is given. */
+  agent?: string;
+  /** At most this many, 1 to 100; 20 when left out. */
+  limit?: number;
+  /** The page before's `next`. */
+  cursor?: Cursor;
+};
+
+/** Which of a conversation's entries to read, pi's `EntryQuery`: newest first unless `order` is `ascending`. */
+export type EntriesQuery = {
+  order?: "ascending" | "descending";
+  /** The oldest entry id that may be given. */
+  minEntryId?: EntryId;
+  /** The newest entry id that may be given. */
+  maxEntryId?: EntryId;
+  /** At most this many, 1 to 100; 50 when left out, as pi's `ConversationTranscript` pages. */
+  limit?: number;
+  /** The page before's `next`, with the same query. */
+  cursor?: Cursor;
+};
+
 /** A server: its HTTP API, and its operations for a way in in the same process. */
 export type Server = {
   /** The HTTP API, a Web-standard handler: serve it on Node, a Worker, or beside the deployment's own routes. */
@@ -140,7 +178,97 @@ export type Server = {
     run: RunRequest,
     control?: RunControl,
   ) => Promise<RunOutcome>;
+  /** The caller's conversations, of the agents they are given, the newest made first. */
+  conversations: (
+    request: Request,
+    query?: ConversationsQuery,
+  ) => Promise<Page<ConversationInfo, Cursor>>;
+  /** One of the caller's conversations, and how it stands. */
+  conversation: (
+    request: Request,
+    conversation: string,
+  ) => Promise<ConversationInfo>;
+  /** A page of one of the caller's conversations' entries, pi's transcript records, without its system entries. */
+  entries: (
+    request: Request,
+    conversation: string,
+    query?: EntriesQuery,
+  ) => Promise<Page<EntryRecord, Cursor>>;
 };
+
+/** The most a page of conversations or entries holds. */
+const pageMax = 100;
+
+/** A page's size from a query string, checked as the operations check it. */
+const Limit = z.coerce.number().optional();
+
+/** A cursor in a query string: pi's cursor, as base64url JSON. */
+const CursorParam = z
+  .string()
+  .min(1)
+  .transform((text, check) => {
+    try {
+      const cursor: unknown = JSON.parse(
+        atob(text.replaceAll("-", "+").replaceAll("_", "/")),
+      );
+      if (
+        typeof cursor === "object" &&
+        cursor !== null &&
+        !Array.isArray(cursor)
+      )
+        return cursor as Cursor;
+    } catch {
+      // Not base64url JSON: refused below.
+    }
+    check.addIssue({ code: "custom", message: "cursor is not a page's next" });
+    return z.NEVER;
+  })
+  .optional();
+
+/** An entry id in a query string. */
+const EntryIdParam = z.coerce
+  .number()
+  .int()
+  .min(0)
+  .transform((id) => id as EntryId)
+  .optional();
+
+/** The query string of the conversations route. */
+const ConversationsParams = z.strictObject({
+  agent: z.string().min(1).optional(),
+  limit: Limit,
+  cursor: CursorParam,
+});
+
+/** The query string of the entries route: pi's `EntryQuery`, a limit and a cursor. */
+const EntriesParams = z.strictObject({
+  order: z.enum(["ascending", "descending"]).optional(),
+  minEntryId: EntryIdParam,
+  maxEntryId: EntryIdParam,
+  limit: Limit,
+  cursor: CursorParam,
+});
+
+/** A page as the routes give it: its `next` as base64url JSON, for a query string. */
+function pageOut<T>({ items, next }: Page<T, Cursor>) {
+  return next === undefined
+    ? { items }
+    : {
+        items,
+        next: btoa(JSON.stringify(next))
+          .replaceAll("+", "-")
+          .replaceAll("/", "_")
+          .replace(/=+$/, ""),
+      };
+}
+
+/** A query string, parsed, or 400 `bad_request`. */
+function paramsOf<T>(schema: z.ZodType<T>, query: Record<string, string>): T {
+  const parsed = schema.safeParse(query);
+  if (!parsed.success)
+    throw new ServerError(400, "bad_request", z.prettifyError(parsed.error));
+  return parsed.data;
+}
 
 /** How long a run waits between keep-alive signals, as LangGraph's `waitKeepAlive`. */
 const keepAliveMs = 1000;
@@ -306,9 +434,123 @@ export function createServer({
     }
   }
 
+  /**
+   * The caller's conversation of this key, with the agents they are given: another caller's, one of an agent they are
+   * not given, and none at all are the same, not found.
+   */
+  async function readable(request: Request, key: string) {
+    const caller = await callerOf(request);
+    const kept = await runtime.conversation(key);
+    const agent =
+      kept?.caller.id === caller.id
+        ? (await agentsFor(caller)).find((given) => given.name === kept.agent)
+        : undefined;
+    if (!kept || !agent)
+      throw new ServerError(
+        404,
+        "conversation_not_found",
+        `conversation "${key}" is not found`,
+      );
+    return { caller, agent, kept };
+  }
+
+  /** A conversation as a client gets it: without the deployment's caller and context, its questions shown. */
+  async function infoOut(
+    agent: AnyAgent,
+    caller: Caller,
+    kept: Kept,
+  ): Promise<ConversationInfo> {
+    const interrupts: Interrupt[] = [];
+    for (const interrupt of kept.interrupts)
+      interrupts.push(await shown(agent, caller, interrupt));
+    return {
+      conversation: kept.conversation,
+      agent: kept.agent,
+      status: kept.status,
+      ...(kept.runId === undefined ? {} : { runId: kept.runId }),
+      interrupts,
+      ...(kept.runFailure === undefined ? {} : { runFailure: kept.runFailure }),
+    };
+  }
+
+  async function conversations(
+    request: Request,
+    { agent: name, limit = 20, cursor }: ConversationsQuery = {},
+  ): Promise<Page<ConversationInfo, Cursor>> {
+    const caller = await callerOf(request);
+    checkLimit(limit);
+    const given = await agentsFor(caller);
+    const agents = given.filter(
+      (agent) => name === undefined || agent.name === name,
+    );
+    if (name !== undefined && agents.length === 0)
+      throw new ServerError(
+        404,
+        "agent_not_found",
+        `agent "${name}" is not given to the caller`,
+      );
+    const page = await badRead(() =>
+      runtime.conversations(caller, {
+        agents: agents.map((agent) => agent.name),
+        limit,
+        ...(cursor === undefined ? {} : { cursor }),
+      }),
+    );
+    const items: ConversationInfo[] = [];
+    for (const kept of page.items)
+      items.push(
+        await infoOut(
+          agents.find((agent) => agent.name === kept.agent)!,
+          caller,
+          kept,
+        ),
+      );
+    return page.next === undefined ? { items } : { items, next: page.next };
+  }
+
+  async function conversation(request: Request, key: string) {
+    const { caller, agent, kept } = await readable(request, key);
+    return infoOut(agent, caller, kept);
+  }
+
+  async function entries(
+    request: Request,
+    key: string,
+    { limit = 50, cursor, ...query }: EntriesQuery = {},
+  ): Promise<Page<EntryRecord, Cursor>> {
+    await readable(request, key);
+    checkLimit(limit);
+    // Readable, so made: a conversation is never removed.
+    return (await badRead(() => runtime.entries(key, query, limit, cursor)))!;
+  }
+
   const app = new Hono();
   app.get("/ok", (c) => c.json({ ok: true }));
   app.get("/agents", async (c) => c.json({ agents: await agents(c.req.raw) }));
+  app.get("/conversations", async (c) =>
+    c.json(
+      pageOut(
+        await conversations(
+          c.req.raw,
+          dropUndefined(paramsOf(ConversationsParams, c.req.query())),
+        ),
+      ),
+    ),
+  );
+  app.get("/conversations/:conversation", async (c) =>
+    c.json(await conversation(c.req.raw, c.req.param("conversation"))),
+  );
+  app.get("/conversations/:conversation/entries", async (c) =>
+    c.json(
+      pageOut(
+        await entries(
+          c.req.raw,
+          c.req.param("conversation"),
+          dropUndefined(paramsOf(EntriesParams, c.req.query())),
+        ),
+      ),
+    ),
+  );
   app.post("/conversations/:conversation/runs/wait", async (c) => {
     const body = RunBody.safeParse(await c.req.json().catch(() => undefined));
     if (!body.success)
@@ -382,7 +624,42 @@ export function createServer({
     agents,
     run: async (request, agent, run, control) =>
       (await start(request, agent, run, control)).outcome,
+    conversations,
+    conversation,
+    entries,
   };
+}
+
+/** A page's size, 1 to `pageMax`, or 400 `bad_request`. */
+function checkLimit(limit: number) {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > pageMax)
+    throw new ServerError(
+      400,
+      "bad_request",
+      `limit must be a whole number from 1 to ${pageMax}`,
+    );
+}
+
+/** A read whose query or cursor storage refuses, such as a cursor of another query, as 400 `bad_request`. */
+async function badRead<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (error instanceof StorageRequestError)
+      throw new ServerError(400, "bad_request", error.message, {
+        cause: error,
+      });
+    throw error;
+  }
+}
+
+/** An object without its undefined fields, as the operations take their options. */
+function dropUndefined<T extends object>(
+  value: T,
+): { [K in keyof T]?: Exclude<T[K], undefined> } {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, field]) => field !== undefined),
+  ) as { [K in keyof T]?: Exclude<T[K], undefined> };
 }
 
 /** The connection of this name among the ones an agent's tools use. */

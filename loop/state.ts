@@ -130,6 +130,22 @@ export const ConversationIndex = defineDocFamily<
 });
 
 /**
+ * A caller's conversations, in the order they were made: one document per caller id, appended in the commit that makes
+ * the conversation, so a caller's list is read without a scan of every conversation.
+ */
+export const CallerIndex = defineDocFamily<
+  { conversations: { conversation: string; agent: string }[] },
+  null
+>({
+  kind: "que-pasa.caller-index",
+  version: 1,
+  scope: "session",
+  family: true,
+  initial: () => ({ conversations: [] }),
+  checkpointWhen: () => true,
+});
+
+/**
  * What a middleware keeps for a conversation: what its `beforeAgent` gave back, written in the commit that makes the
  * conversation, so a run that resumes in a new process reads the same. One per middleware, by its name.
  */

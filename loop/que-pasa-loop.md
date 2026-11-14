@@ -1,6 +1,6 @@
 ---
 type: component
-description: "que-pasa's loop: an agent in motion on pi-durable, durable and traced: a conversation that keeps its history across runs, and a run, one input to its result, which can stop at a tool call to ask a person. Read for the idea it follows, what is a conversation's and what is a run's, the states a run moves through, the interrupt, the invariants that hold in every state and what holds each, and what a run leaves."
+description: "que-pasa's loop: an agent in motion on pi-durable, durable and traced: a conversation that keeps its history across runs, and a run, one input to its result, which can stop at a tool call to ask a person. Read for the idea it follows, what is a conversation's and what is a run's, the states a run moves through, the interrupt, how a client reads a conversation, the invariants that hold in every state and what holds each, and what a run leaves."
 status: running
 ---
 An agent in motion: a conversation of one agent and one caller, and its runs, each one input to its result. Nobody writes a run; `loop/` makes it, on pi-durable, whose generation task is the loop itself.
@@ -8,6 +8,7 @@ An agent in motion: a conversation of one agent and one caller, and its runs, ea
 - [[#Conversation and run]] what lives across runs, and what is one run's
 - [[#States]] what a run moves through, and what moves it
 - [[#The interrupt]] a tool call that stops to ask a person, and goes on with the answer
+- [[#Reading a conversation]] a caller's conversations, how one stands, and its entries
 - [[#Invariants]] what holds in every state, and what holds it
 - [[#After a crash]] what each crash point does, and what still holds
 - [[#What it leaves]] its result, usage, conversation and trace
@@ -92,6 +93,22 @@ A tool call that stops before its tool's code runs to ask a person, and goes on 
 - a run nobody attends: the call keeps its question and stops the run before its tool acts; the run fails, `needs_connection` for a login and `needs_answer` for anything else, with the questions. A steer that joined it fails the same, with the same questions: pi settles every input of a run with one outcome, and a question keeps every run of pi's run when it was asked
 - input while a run waits: as while it goes on, by its `whenBusy`. A steer joins it and gives back the same questions; a follow-up starts once the run is answered and ends. Not built: dropping the question for a new input
 
+## Reading a conversation
+
+What a client reads of its conversations, as LangGraph's thread search, thread and thread state, in pi's words: three reads on the runtime, each from what pi keeps.
+- `runtime.conversations(caller, { agents, limit, cursor })`: the caller's conversations, the newest made first, a page at a time, pi's `Page` (`items`, `next`)
+	- held by the caller index: a session document per caller id, its conversations in the order they were made, appended in the commit that makes each, so a page reads the caller's and no other's
+	- `agents`: only those of these agents; `limit`: 20 when left out; `cursor`: the page before's `next`
+- `runtime.conversation(key)`: how it stands, LangGraph's thread: what its first run made it with (agent, caller, context), and
+	- `status`: `busy` while pi's run goes on, `interrupted` while it waits on questions someone can answer (the rule `run()` gives `interrupted` by), `error` when idle and pi keeps `runFailure` (its newest run ended with no answer), `idle` otherwise
+	- `runId`: the run going on, when busy or interrupted: answers go on it, as `{ resume }`
+	- `interrupts`: the questions it waits on, when interrupted
+	- `runFailure`: pi's reason and detail, when `error`
+- `runtime.entries(key, query, limit, cursor)`: a page of its entries, pi's transcript records, as pi's `conversation.entries()` gives them: `query` is pi's `EntryQuery` (`order`, newest first by default; `minEntryId`, `maxEntryId`)
+	- without the system entries: the instructions and tool definitions are the deployment's. A client sees the messages, as `onMessages` gives them
+	- a page is filled to `limit` while the scan has more, and `next` is pi's cursor, set only while it does: so pi's `ConversationTranscript`, which pages by entry ids and ends on no `next`, pages it as it pages pi's own
+- a key no run made: `conversation` and `entries` give undefined. A cursor that is not a page's `next` of the same query is refused, pi's `StorageRequestError`
+
 ## Invariants
 
 What holds in every state of every run. Each is held by construction, and checked by a test.
@@ -104,7 +121,7 @@ What holds in every state of every run. Each is held by construction, and checke
 | no run state in memory: a new process can go on with any run | the conversation's and the run's documents; the result and the reminders in the transcript | `crash.test.ts`: every crash point, in a new process |
 | a finished step is never done twice | pi's checkpoint per step; a marker kept just before a tool's code runs, so a tool not marked `replay: "safe"` that started never runs again | `crash.test.ts`: mid tool, mid model request, after the submit |
 | a call waits only before its tool acts, so a wait is safe to take up again whatever the tool's replay | `interrupt` refused once the tool started; to pi every que-pasa tool is replay-safe, so a waiting call reruns, and que-pasa keeps the tool's own rule | `crash.test.ts`: killed while a call waits, then answered: the tool runs once |
-| a person is asked once: a question answered is never asked again | the question and its answer kept in the run's document, by an id the rerun asks by again | `crash.test.ts`: killed after the answer, before the tool ran: it goes on, asking nobody |
+| a person is asked once: a question answered is never asked again | the question and its answer kept on the conversation, by an id the rerun asks by again | `crash.test.ts`: killed after the answer, before the tool ran: it goes on, asking nobody |
 | a run keeps what it was started with: input and model | the run document and the model, written once, in the commit that admits the run | `runtime.test.ts`, `crash.test.ts`: a run started again keeps its model, also mid a conversation's second run |
 | a conversation keeps the middleware state it was made with: its system prompt is the same in every run and every process | each `beforeAgent` result kept in a `MiddlewareDoc`, in the commit that makes the conversation; a section renders from it, never from memory | `crash.test.ts`: the memory file changed, and the resumed process's model gets the text the run started with |
 | a tool's code runs only with a login for each connection it uses | the call's check before the tool's code: a run someone attends asks for a missing one; a shared login the caller may not use gives the model no access | `runtime.test.ts`: asked, answered while still missing, asked again, then connected |
@@ -115,6 +132,8 @@ What holds in every state of every run. Each is held by construction, and checke
 | a run's result, usage and trace are its own, not the conversation's | the result read from the run's submission; the usage from what the conversation had spent at each run's start, kept before its first model request; a segment per run | `runtime.test.ts`, `trace.test.ts`, `busy.test.ts`: two runs on one conversation, also a follow-up queued behind the first |
 | the result is the run's last submit that passed the schema | the submit tool parses with zod before it keeps the result; a failed parse goes back to the model; the reminder counts only the run's own entries | `runtime.test.ts`: a bad submit, then a good one; a second run reminded though the first submitted |
 | every segment of a run is in one trace | the run document keeps the span the run started in, or its first segment | `crash.test.ts`: the resumed segment under the host's span |
+| a caller's list holds every conversation made for them, and no other's | the caller index, appended in the commit that makes the conversation, keyed by the caller the conversation acts for | `history.test.ts`: three made for one caller, one for another, each listed to its own |
+| a client reads the messages, never the deployment's system prompt | the entries read without pi's system entries, a page filled past them | `history.test.ts`: every message of two runs, paged one at a time each way, and no system entry |
 | tracing never fails a run | each hook's tracing runs guarded; an error goes to OpenTelemetry's `diag` | the whole suite runs with and without an SDK |
 
 ## After a crash
