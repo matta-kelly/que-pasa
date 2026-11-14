@@ -11,6 +11,7 @@
  */
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   createModels,
   fauxAssistantMessage,
@@ -27,6 +28,7 @@ import {
   SimpleSpanProcessor,
   TracerProvider,
 } from "@opentelemetry/sdk-trace";
+import { DefaultChatTransport, readUIMessageStream, type UIMessage } from "ai";
 import { z } from "zod";
 import {
   defineAgent,
@@ -39,6 +41,7 @@ import {
 } from "../define/index.ts";
 import { humanInTheLoop, memory } from "../middleware/index.ts";
 import { local } from "../sandbox/index.ts";
+import { createServer } from "../server/index.ts";
 import { openRuntime, provide } from "./index.ts";
 import { resultOf } from "./scripted.fixture.ts";
 
@@ -58,7 +61,12 @@ type Scenario =
   /** A run nobody attends, killed before its call asks; the next process asks, and the run fails. */
   | "unattended"
   /** A follow-up queued while the run goes on, killed mid its tool; the next process runs both, in order. */
-  | "queued";
+  | "queued"
+  /**
+   * Killed mid a replay-safe tool; in the next process a chat client reconnects to the run's stream, which replays the
+   * run so far, then follows it live to its end.
+   */
+  | "chat";
 const [scenario, phase, file, log, spans] = process.argv.slice(2) as [
   Scenario,
   "first" | "second",
@@ -128,6 +136,10 @@ const notes = defineConnection({
   connect: ({ token }) => ({ who: `${token} in ${phase}` }),
 });
 
+/** The chat scenario's client reconnected: the second phase's rerun of the step goes on after it. */
+let reconnect = () => {};
+const reconnected = new Promise<void>((resolve) => (reconnect = resolve));
+
 /**
  * The step tool: it logs each run of itself with the context its run was given, or in the resource scenario with the
  * run's resource, and in the first phase waits there.
@@ -141,7 +153,8 @@ const step = defineTool({
   scenario === "resource" ||
   scenario === "memory" ||
   scenario === "connection" ||
-  scenario === "queued"
+  scenario === "queued" ||
+  scenario === "chat"
     ? { replay: "safe" as const }
     : {}),
   run: async (_input, runtime: Runtime<{ tag: string }>) => {
@@ -153,6 +166,8 @@ const step = defineTool({
           : runtime.context.tag;
     appendFileSync(log, `${seen}\n`);
     if (phase === "first" && scenario === "queued") await followUp();
+    // The chat scenario's rerun waits for the client, so its stream has a replay and a live part.
+    if (phase === "second" && scenario === "chat") await reconnected;
     return phase === "first" ? crashPoint() : "stepped";
   },
 });
@@ -261,6 +276,11 @@ faux.setResponses(
             stopReason: "toolUse",
           }),
         ],
+        chat: [
+          fauxAssistantMessage([fauxToolCall("step", {})], {
+            stopReason: "toolUse",
+          }),
+        ],
         "second-run": [
           fauxAssistantMessage(
             [fauxToolCall("submit", { verdict: "raise", note: "first run" })],
@@ -325,6 +345,46 @@ const go = (runId: string, model?: string) =>
       }
       return resultOf(outcome);
     });
+/**
+ * The chat scenario's second phase: a chat client reconnects to the run's stream, with the AI SDK's own transport, and
+ * reads it to the end. Gives the parts of the message it built, and whether the chat's history reads back the same.
+ */
+async function followChat() {
+  const server = createServer({
+    runtime,
+    authenticate: () => ({ id: "crash-test" }),
+    agentsFor: () => [agent],
+  });
+  const transport = new DefaultChatTransport({
+    api: "http://que/chat",
+    fetch: (url, init) => server.fetch(new Request(url, init)),
+  });
+  const stream = await transport.reconnectToStream({ chatId: "chat-1" });
+  if (!stream) throw new Error("no run goes on to reconnect to");
+  reconnect();
+  let last: UIMessage | undefined;
+  for await (const message of readUIMessageStream({
+    stream,
+    terminateOnError: true,
+  }))
+    last = structuredClone(message);
+  const history = (await (
+    await server.fetch(new Request("http://que/chat/chat-1/messages"))
+  ).json()) as { messages: UIMessage[] };
+  return {
+    parts: last!.parts.map((part) =>
+      part.type === "dynamic-tool"
+        ? `${part.toolName}:${part.state}`
+        : part.type,
+    ),
+    // As JSON, as the client got both: the reader leaves fields it sets to undefined, which JSON has not.
+    history: isDeepStrictEqual(
+      history.messages.at(-1),
+      JSON.parse(JSON.stringify(last)),
+    ),
+  };
+}
+
 /** The queued scenario's follow-up, admitted while the first run's tool runs: resolves once it is kept. */
 function followUp() {
   return new Promise<void>((admitted) => {
@@ -347,17 +407,20 @@ if (phase === "first")
   console.log(
     `HOST ${host.spanContext().traceId} ${host.spanContext().spanId}`,
   );
+// In the chat scenario's second phase, the run goes on by itself, after the restart: a chat client follows it.
 const running =
-  phase === "first"
-    ? context.with(trace.setSpan(context.active(), host), () =>
-        go(
-          runId,
-          scenario === "second-run"
-            ? `${faux.provider.id}:fallback`
-            : undefined,
-        ),
-      )
-    : go(runId);
+  phase === "second" && scenario === "chat"
+    ? followChat()
+    : phase === "first"
+      ? context.with(trace.setSpan(context.active(), host), () =>
+          go(
+            runId,
+            scenario === "second-run"
+              ? `${faux.provider.id}:fallback`
+              : undefined,
+          ),
+        )
+      : go(runId);
 
 if (phase === "first") {
   if (scenario === "model") setTimeout(() => void crashPoint(), 300);

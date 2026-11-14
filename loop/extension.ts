@@ -173,7 +173,10 @@ function identitySection(agent: AnyAgent): PromptSection {
   };
 }
 
-/** Keeps what a conversation had spent when its run going on started. */
+/**
+ * Before each model request of the run going on, by its generation task: keeps what the conversation had spent when
+ * the run started, and stops a run a person stopped that a crash let go on.
+ */
 export type Started = (
   id: ConversationId,
   reader: DocumentReader,

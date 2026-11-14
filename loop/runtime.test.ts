@@ -1980,6 +1980,7 @@ describe("a run's connections", () => {
         interrupts: [
           {
             id: "l:connection-crm:0",
+            callId: "l",
             value: {
               type: "connection",
               name: "crm",
@@ -1989,11 +1990,11 @@ describe("a run's connections", () => {
           },
         ],
       });
-      // An answer while still not connected asks again.
+      // Approved while still not connected: it asks again.
       await expect(
         runtime.run(
           agent,
-          { resume: { "l:connection-crm:0": "done" } },
+          { resume: { "l:connection-crm:0": { type: "approve" } } },
           options,
         ),
       ).resolves.toMatchObject({
@@ -2003,7 +2004,11 @@ describe("a run's connections", () => {
       login = "matt";
       await expect(
         runtime
-          .run(agent, { resume: { "l:connection-crm:1": "done" } }, options)
+          .run(
+            agent,
+            { resume: { "l:connection-crm:1": { type: "approve" } } },
+            options,
+          )
           .then(resultOf),
       ).resolves.toBe("Two leads.");
     } finally {
@@ -2011,6 +2016,69 @@ describe("a run's connections", () => {
     }
     expect(prompts[0]).not.toContain("logged in as");
     expect(prompts[1]).toContain("- crm: matt kelly (id 7)");
+  });
+
+  it("ends the call with an error the model reads when the person rejects connecting, and the tool never runs", async () => {
+    const crm = defineConnection({
+      name: "crm",
+      owner: "user",
+      credential: z.object({ token: z.string() }),
+      connect: ({ token }) => ({ token }),
+    });
+    let ran = false;
+    const mine = defineTool({
+      name: "my_leads",
+      description: "Read my leads.",
+      schema: z.object({}),
+      uses: [crm],
+      run: async (_input, runtime) => {
+        ran = true;
+        return (await runtime.use(crm)).token;
+      },
+    });
+    const { faux, models, model } = scripted();
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("my_leads", {}, { id: "l" })], {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage([fauxText("Not connected.")]),
+    ]);
+    const agent = defineAgent({
+      name: "seller",
+      model,
+      instructions: "Sell.",
+      tools: [mine],
+    });
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [agent],
+      credentialFor: () => undefined,
+    });
+    const options = { conversation: "c", runId: "1", caller, attended: true };
+    let messages: Message[] = [];
+    try {
+      await runtime.run(agent, "My leads?", options);
+      await runtime
+        .run(
+          agent,
+          {
+            resume: {
+              "l:connection-crm:0": { type: "reject", message: "later" },
+            },
+          },
+          { ...options, onMessages: (all) => (messages = all) },
+        )
+        .then(resultOf);
+    } finally {
+      await runtime.close();
+    }
+    expect(ran).toBe(false);
+    const result = messages.find((m) => m.role === "toolResult");
+    expect(result).toMatchObject({ isError: true });
+    expect(JSON.stringify(result)).toContain(
+      "No access to crm: the person you act for did not connect it, and says: later.",
+    );
   });
 
   it("gives the model no access, and asks nobody, for a shared login the caller may not use", async () => {

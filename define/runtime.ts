@@ -32,12 +32,23 @@ export type Json =
 export type Runtime<C extends Json | undefined = undefined> = {
   caller: Caller;
   context: C;
+  /**
+   * Aborted when the call is: its run stopped, or the host closing. A tool that waits on something long passes it on,
+   * as LangChain's `config.signal`; the run does not wait for a tool that does not.
+   */
+  signal: AbortSignal;
   /** The conversation's value of a resource the tool declares in `uses`. Any other resource throws. */
   use<T>(resource: Resource<T>): Promise<T>;
 };
 
 /**
- * A question a run waits on, as LangGraph's `Interrupt`: its id, which an answer names, and its value, what the asker
- * asked. `error` says why the last answer to it was refused.
+ * A question a run waits on, as LangGraph's `Interrupt`: its id, which an answer names, the tool call that asked it,
+ * which waits for the answer before its tool runs, and its value, what the asker asked. `error` says why the last
+ * answer to it was refused.
  */
-export type Interrupt = { id: string; value: Json; error?: string };
+export type Interrupt = {
+  id: string;
+  callId: string;
+  value: Json;
+  error?: string;
+};

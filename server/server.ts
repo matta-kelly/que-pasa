@@ -4,12 +4,11 @@
  * the deployment's runtime. Its HTTP API is LangGraph's routes in pi's words; its operations serve a way in that lives in
  * the same process, such as an MCP layer.
  */
-import {
-  type Cursor,
-  type EntryId,
-  type EntryRecord,
-  type Page,
-  StorageRequestError,
+import type {
+  Cursor,
+  EntryId,
+  EntryRecord,
+  Page,
 } from "@earendil-works/pi-durable";
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
@@ -26,39 +25,29 @@ import {
 import {
   type ConnectionQuestion,
   type ConversationInfo as Kept,
+  type RunInfo,
   RunFailed,
   RunRefused,
   type Runtime,
   type WhenBusy,
 } from "../loop/index.ts";
 
+import { chatRoutes } from "./chat/routes.ts";
+import { shownInfo } from "./questions.ts";
+import { Refused, ServerError } from "./errors.ts";
+import {
+  badRead,
+  checkLimit,
+  CursorParam,
+  Limit,
+  pageOut,
+  paramsOf,
+} from "./page.ts";
+
+export { Refused, ServerError };
+
 /** Any agent, as a deployment gives it. */
 type AnyAgent = Agent<z.ZodObject | undefined, Json | undefined>;
-
-/** A request the server refuses, with its HTTP status and a code a client can act on. */
-export class ServerError extends Error {
-  override readonly name: string = "ServerError";
-  readonly status: 400 | 401 | 403 | 404 | 409 | 422 | 502;
-  readonly code: string;
-  constructor(
-    status: 400 | 401 | 403 | 404 | 409 | 422 | 502,
-    code: string,
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.status = status;
-    this.code = code;
-  }
-}
-
-/** What a deployment's hook throws to refuse a request: 403 `forbidden`. */
-export class Refused extends ServerError {
-  override readonly name = "Refused";
-  constructor(message: string) {
-    super(403, "forbidden", message);
-  }
-}
 
 /** What a deployment answers for the server. */
 export type ServerOptions = {
@@ -149,6 +138,14 @@ export type ConversationsQuery = {
   cursor?: Cursor;
 };
 
+/** Which of a conversation's runs to read: the newest admitted first, a page at a time. */
+export type RunsQuery = {
+  /** At most this many, 1 to 100; 20 when left out. */
+  limit?: number;
+  /** The page before's `next`. */
+  cursor?: Cursor;
+};
+
 /** Which of a conversation's entries to read, pi's `EntryQuery`: newest first unless `order` is `ascending`. */
 export type EntriesQuery = {
   order?: "ascending" | "descending";
@@ -188,6 +185,27 @@ export type Server = {
     request: Request,
     conversation: string,
   ) => Promise<ConversationInfo>;
+  /** A page of one of the caller's conversation's runs, LangGraph's runs of a thread, the newest admitted first. */
+  runs: (
+    request: Request,
+    conversation: string,
+    query?: RunsQuery,
+  ) => Promise<Page<RunInfo, Cursor>>;
+  /** One run of one of the caller's conversations, and how it stands. */
+  runOf: (
+    request: Request,
+    conversation: string,
+    runId: string,
+  ) => Promise<RunInfo>;
+  /**
+   * Stop a run of one of the caller's conversations, as LangGraph's cancel: the run going on, with the runs queued
+   * behind it, or a queued one alone. `stopped` is false for a run that had ended.
+   */
+  stop: (
+    request: Request,
+    conversation: string,
+    runId: string,
+  ) => Promise<{ stopped: boolean }>;
   /** A page of one of the caller's conversations' entries, pi's transcript records, without its system entries. */
   entries: (
     request: Request,
@@ -195,35 +213,6 @@ export type Server = {
     query?: EntriesQuery,
   ) => Promise<Page<EntryRecord, Cursor>>;
 };
-
-/** The most a page of conversations or entries holds. */
-const pageMax = 100;
-
-/** A page's size from a query string, checked as the operations check it. */
-const Limit = z.coerce.number().optional();
-
-/** A cursor in a query string: pi's cursor, as base64url JSON. */
-const CursorParam = z
-  .string()
-  .min(1)
-  .transform((text, check) => {
-    try {
-      const cursor: unknown = JSON.parse(
-        atob(text.replaceAll("-", "+").replaceAll("_", "/")),
-      );
-      if (
-        typeof cursor === "object" &&
-        cursor !== null &&
-        !Array.isArray(cursor)
-      )
-        return cursor as Cursor;
-    } catch {
-      // Not base64url JSON: refused below.
-    }
-    check.addIssue({ code: "custom", message: "cursor is not a page's next" });
-    return z.NEVER;
-  })
-  .optional();
 
 /** An entry id in a query string. */
 const EntryIdParam = z.coerce
@@ -240,6 +229,9 @@ const ConversationsParams = z.strictObject({
   cursor: CursorParam,
 });
 
+/** The query string of the runs route. */
+const RunsParams = z.strictObject({ limit: Limit, cursor: CursorParam });
+
 /** The query string of the entries route: pi's `EntryQuery`, a limit and a cursor. */
 const EntriesParams = z.strictObject({
   order: z.enum(["ascending", "descending"]).optional(),
@@ -248,27 +240,6 @@ const EntriesParams = z.strictObject({
   limit: Limit,
   cursor: CursorParam,
 });
-
-/** A page as the routes give it: its `next` as base64url JSON, for a query string. */
-function pageOut<T>({ items, next }: Page<T, Cursor>) {
-  return next === undefined
-    ? { items }
-    : {
-        items,
-        next: btoa(JSON.stringify(next))
-          .replaceAll("+", "-")
-          .replaceAll("/", "_")
-          .replace(/=+$/, ""),
-      };
-}
-
-/** A query string, parsed, or 400 `bad_request`. */
-function paramsOf<T>(schema: z.ZodType<T>, query: Record<string, string>): T {
-  const parsed = schema.safeParse(query);
-  if (!parsed.success)
-    throw new ServerError(400, "bad_request", z.prettifyError(parsed.error));
-  return parsed.data;
-}
 
 /** How long a run waits between keep-alive signals, as LangGraph's `waitKeepAlive`. */
 const keepAliveMs = 1000;
@@ -524,6 +495,56 @@ export function createServer({
     return (await badRead(() => runtime.entries(key, query, limit, cursor)))!;
   }
 
+  /** A run as the caller sees it: its unanswered questions shown, as a run gives them. */
+  async function runOut(
+    agent: AnyAgent,
+    caller: Caller,
+    info: RunInfo,
+  ): Promise<RunInfo> {
+    return shownInfo(info, (interrupt) => shown(agent, caller, interrupt));
+  }
+
+  async function runs(
+    request: Request,
+    key: string,
+    { limit = 20, cursor }: RunsQuery = {},
+  ): Promise<Page<RunInfo, Cursor>> {
+    const { caller, agent } = await readable(request, key);
+    checkLimit(limit);
+    // Readable, so made: a conversation is never removed.
+    const page = (await badRead(() =>
+      runtime.runs(key, { limit, ...(cursor === undefined ? {} : { cursor }) }),
+    ))!;
+    const items: RunInfo[] = [];
+    for (const info of page.items)
+      items.push(await runOut(agent, caller, info));
+    return page.next === undefined ? { items } : { items, next: page.next };
+  }
+
+  async function runOf(request: Request, key: string, runId: string) {
+    const { caller, agent } = await readable(request, key);
+    const info = await runtime.runOf(key, runId);
+    if (!info)
+      throw new ServerError(
+        404,
+        "run_not_found",
+        `run "${runId}" is not found`,
+      );
+    return runOut(agent, caller, info);
+  }
+
+  async function stop(request: Request, key: string, runId: string) {
+    await readable(request, key);
+    const stopped = await runtime.stop(key, runId);
+    if (stopped === undefined)
+      throw new ServerError(
+        404,
+        "run_not_found",
+        `run "${runId}" is not found`,
+      );
+    return { stopped: stopped === "stopped" };
+  }
+
   const app = new Hono();
   app.get("/ok", (c) => c.json({ ok: true }));
   app.get("/agents", async (c) => c.json({ agents: await agents(c.req.raw) }));
@@ -539,6 +560,44 @@ export function createServer({
   );
   app.get("/conversations/:conversation", async (c) =>
     c.json(await conversation(c.req.raw, c.req.param("conversation"))),
+  );
+  app.get("/conversations/:conversation/runs", async (c) =>
+    c.json(
+      pageOut(
+        await runs(
+          c.req.raw,
+          c.req.param("conversation"),
+          dropUndefined(paramsOf(RunsParams, c.req.query())),
+        ),
+      ),
+    ),
+  );
+  app.get("/conversations/:conversation/runs/:runId", async (c) =>
+    c.json(
+      await runOf(c.req.raw, c.req.param("conversation"), c.req.param("runId")),
+    ),
+  );
+  app.post("/conversations/:conversation/runs/:runId/cancel", async (c) =>
+    c.json(
+      await stop(c.req.raw, c.req.param("conversation"), c.req.param("runId")),
+    ),
+  );
+  app.route(
+    "/chat",
+    chatRoutes({
+      runtime,
+      readable,
+      admit: async (request, agent, run) => {
+        const { outcome } = await start(request, agent, run);
+        // A chat follows its run through its stream: the outcome is not waited for here.
+        void outcome.catch(onError);
+      },
+      shown: async (request, key, interrupt) => {
+        const { caller, agent } = await readable(request, key);
+        return shown(agent, caller, interrupt);
+      },
+      onError,
+    }),
   );
   app.get("/conversations/:conversation/entries", async (c) =>
     c.json(
@@ -627,30 +686,10 @@ export function createServer({
     conversations,
     conversation,
     entries,
+    runs,
+    runOf,
+    stop,
   };
-}
-
-/** A page's size, 1 to `pageMax`, or 400 `bad_request`. */
-function checkLimit(limit: number) {
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > pageMax)
-    throw new ServerError(
-      400,
-      "bad_request",
-      `limit must be a whole number from 1 to ${pageMax}`,
-    );
-}
-
-/** A read whose query or cursor storage refuses, such as a cursor of another query, as 400 `bad_request`. */
-async function badRead<T>(read: () => Promise<T>): Promise<T> {
-  try {
-    return await read();
-  } catch (error) {
-    if (error instanceof StorageRequestError)
-      throw new ServerError(400, "bad_request", error.message, {
-        cause: error,
-      });
-    throw error;
-  }
 }
 
 /** An object without its undefined fields, as the operations take their options. */

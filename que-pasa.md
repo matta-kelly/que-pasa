@@ -67,13 +67,14 @@ What is written in a workspace's own repo, with que-pasa's `define`: its agents,
 - a run's life: it starts from an input, moves through model and tool calls, and ends with an answer or a submit. The conversation's next run starts from a new input, with the whole history
 - what keeps it right: durability, so a finished step is never done twice and a person is never asked twice; middleware, whose state a conversation keeps, so every run on it, also one that resumes, has what it was made with; approval, a person's yes before a gated call. Limits are not built
 - what it leaves: its result, usage, conversation, and its trace, which is what evals read
-- what a client reads: a caller's conversations, how one stands (its status, the run going on and its questions), and its entries, pi's transcript records without the system prompt ([[que-pasa-loop#Reading a conversation]])
+- what a client reads: a caller's conversations, how one stands (its status, the run going on and its questions), its entries, pi's transcript records without the system prompt, its runs, and the conversation as it changes ([[que-pasa-loop#Reading a conversation]])
+- a person can stop a run: it stops at once, with what is queued behind it, and ends stopped, not failed ([[que-pasa-loop#Conversation and run]])
 
 ## Host
 
 How a workspace's agents are reached: a process that runs them.
 - today a host wires `loop/` itself: storage, models, its agents, the resources their tools use (such as each conversation's sandbox), the OTel SDK, and starting again the runs a restart left. Assembly is one
-- server ([[que-pasa-server]]): a host that starts runs for callers outside its process, after LangGraph's Agent Server. It asks the deployment who is calling, which agents they get and what context a conversation has, then runs the agent. Its HTTP API lists the caller's agents, runs an input on a conversation, and reads the caller's conversations and their entries; its operations serve a way in in the same process. L&L is its first deployment
+- server ([[que-pasa-server]]): a host that starts runs for callers outside its process, after LangGraph's Agent Server. It asks the deployment who is calling, which agents they get and what context a conversation has, then runs the agent. Its HTTP API lists the caller's agents, runs an input on a conversation, reads the caller's conversations, their entries and their runs, and stops a run; its operations serve a way in in the same process. Its chat surface ([[que-pasa-chat]]) speaks the AI SDK's chat protocol, so a browser chat on `useChat`, assistant-ui or AI Elements streams a run, answers its approvals and stops it, with no glue. L&L is its first deployment
 - a standard host, which does that wiring by convention for any workspace: not built
 	- storage in the deployment's data folder, and models from env
 	- traces: it starts the OpenTelemetry SDK, which reads OTel's own `OTEL_*` variables, so a deployment points its traces at Langfuse, a collector or any backend with no code. With none set, OTLP JSON files in a known folder of the data folder: the one part que-pasa writes

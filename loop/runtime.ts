@@ -4,16 +4,18 @@ import {
   withAbortSignal,
   withCancel,
 } from "@earendil-works/chord/context";
-import type { Message, Models } from "@earendil-works/pi-ai";
+import type { Message, Models, UserMessage } from "@earendil-works/pi-ai";
 import { isDeepStrictEqual } from "node:util";
 import {
   AgentDoc,
   type Conversation,
   ConversationBusy,
   type ConversationId,
+  type ConversationView as PiConversationView,
   configure,
   createRegistry,
   type Cursor,
+  type EntryId,
   type EntryQuery,
   type EntryRecord,
   type Extension,
@@ -25,11 +27,15 @@ import {
   type SettledSubmissionRecord,
   StorageRequestError,
   type DocumentReader,
+  InboxDoc,
   type Storage,
   type Submission,
   type SubmissionId,
+  type SubmissionRecord,
+  SystemEntry,
   UsageDoc,
   type UsageState,
+  type WatchHandle,
 } from "@earendil-works/pi-durable";
 import type { z } from "zod";
 import {
@@ -69,7 +75,13 @@ import {
   runGoingOn,
 } from "./state.ts";
 import { activeParent, createTracing } from "./trace.ts";
-import { answerText, entriesOf, messagesOf, outcomeOf } from "./transcript.ts";
+import {
+  answerText,
+  entriesOf,
+  messagesOf,
+  outcomeOf,
+  userInputText,
+} from "./transcript.ts";
 import { usageOf } from "./usage.ts";
 
 /** The tokens and cost a run spent: per `provider/model-id` for model calls, and per tool for tools that report it. */
@@ -122,6 +134,59 @@ export type ConversationInfo = {
   interrupts: Interrupt[];
   /** Why its newest run ended with no answer, when it is `error`: pi's `runFailure`. */
   runFailure?: { reason: RunFailureReason; detail?: string };
+};
+
+/**
+ * How a run stands, in the words of a run's outcome: `pending` while queued behind another, `running`, `interrupted`
+ * while it waits on questions, then `done`, `failed`, or `stopped` by a person.
+ */
+export type RunStatus =
+  "pending" | "running" | "interrupted" | "done" | "failed" | "stopped";
+
+/** A run as a client reads it, LangGraph's run: how it stands, and where its entries are in the conversation. */
+export type RunInfo = {
+  runId: string;
+  status: RunStatus;
+  /** Its input, while it is queued: pi's inbox keeps it until it is placed, and its entries hold it after. */
+  input?: string;
+  /** Why it failed, when `failed`: as `RunFailed` gives it. */
+  failure?: { reason: string; message: string };
+  /** The run it joined, for a steer: its entries are that run's. */
+  joined?: string;
+  /** The steers that joined it, each with its input's entry once placed. */
+  steers: { runId: string; entry?: EntryId }[];
+  /** What its calls asked, with the answers given: LangGraph's interrupts of a run, kept after it ends. */
+  questions: Question[];
+  /**
+   * Its entries, inclusive: from its input's to the one before the next run's input, or open while it is the newest.
+   * Absent before it starts, and for a steer.
+   */
+  entries?: { first: EntryId; last?: EntryId };
+};
+
+/** A question a run's call asked, and its answer once given. */
+export type Question = Interrupt & { answer?: Json };
+
+/** Which of a conversation's runs to read: the newest first, a page at a time. */
+export type RunsOptions = {
+  /** At most this many; 20 when left out. */
+  limit?: number;
+  /** Where the page before ended: its `next`. */
+  cursor?: Cursor;
+};
+
+/**
+ * A conversation as it changes, after pi's `ConversationView`: how it stands, a window of its newest entries without
+ * the system entries, and pi's live state, which holds the answer being written and the running tool calls.
+ */
+export type ConversationView = {
+  info: ConversationInfo;
+  /** A window of its newest entries, in order; `ConversationTranscript`'s rules apply, and `entries()` pages the rest. */
+  entries: readonly EntryRecord[];
+  /** The entry just before the window; absent when the window starts the transcript. */
+  before?: EntryId;
+  /** pi's `pi.live`: the run, the generation streaming its answer, the tool round. */
+  live: LiveState;
 };
 
 /** Which of a caller's conversations to read, and from where: the newest first. */
@@ -242,6 +307,29 @@ export type Runtime = {
     caller: Caller,
     options?: ConversationsOptions,
   ): Promise<Page<ConversationInfo, Cursor>>;
+  /** A conversation's runs, the newest admitted first, a page at a time; undefined when no run made it. */
+  runs(
+    key: string,
+    options?: RunsOptions,
+  ): Promise<Page<RunInfo, Cursor> | undefined>;
+  /** One run of a conversation, and how it stands; undefined when it was never admitted. */
+  runOf(key: string, runId: string): Promise<RunInfo | undefined>;
+  /**
+   * Stop a run, as a person asks it to. The run going on stops at once, with the steers that joined it and the runs
+   * queued behind it, as pi's `abort()` does: nothing the person asked for goes on. A queued run alone is withdrawn,
+   * and the rest go on. Kept before pi aborts it, so a crash between stops it too. A run that has ended stays as it
+   * ended: `ended`. Undefined when it was never admitted.
+   */
+  stop(key: string, runId: string): Promise<"stopped" | "ended" | undefined>;
+  /**
+   * Watch a conversation as it changes, pi's `watch()`: its first value at once, then one after each change, the
+   * newest only when the reader is slower. Ends with the signal, or when the runtime closes; undefined when no run made
+   * it.
+   */
+  watch(
+    key: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<AsyncIterable<ConversationView> | undefined>;
   /** Close the harness. A run still going is kept, and goes on when a runtime opens on the same storage. */
   close(): Promise<void>;
 };
@@ -388,6 +476,8 @@ export async function openRuntime({
         extensions: [extension, tracing.extension],
       });
       Object.assign(await tx.doc(ConversationDoc, id), given, { runs: [] });
+      // So the questions its runs' calls ask can be watched from its first run.
+      await tx.doc(InterruptsDoc, id);
       (await tx.doc(CallerIndex, given.caller.id, null)).conversations.push({
         conversation: key,
         agent: given.agent,
@@ -421,7 +511,8 @@ export async function openRuntime({
     const admitted = await harness.commit(async (tx) => {
       const had = await tx.submissionByRequest(id, runId);
       if (had) return had.id;
-      const busy = (await tx.doc(LiveDoc, id)).run !== undefined;
+      const live = await tx.doc(LiveDoc, id);
+      const busy = live.run !== undefined;
       let submission: SubmissionId;
       try {
         // Before any table write, as pi requires; a busy conversation that refuses throws here, having written nothing.
@@ -434,7 +525,6 @@ export async function openRuntime({
       } catch (error) {
         if (!(error instanceof ConversationBusy)) throw error;
         const kept = await tx.doc(ConversationDoc, id);
-        const live = await tx.doc(LiveDoc, id);
         const going =
           kept.inputs?.[live.run?.inputs[0] ?? ""] ?? kept.runs.at(-1);
         throw new RunRefused(
@@ -450,12 +540,28 @@ export async function openRuntime({
       } else {
         await configure(tx, id, { model: parseModel(model) });
       }
-      Object.assign(await tx.doc(RunDoc, id, runId, null), start, { model });
-      // So the questions its calls ask can be watched from its start. A run that starts at once starts with none: the
-      // questions of the runs before it ended with them.
-      const questions = await tx.doc(InterruptsDoc, id);
-      if (!busy) questions.asked = {};
+      if (!busy) {
+        // A run that starts at once starts with no questions: those of the runs before it go to the runs that asked.
+        const questions = await tx.doc(InterruptsDoc, id);
+        for (const [question, asked] of Object.entries(questions.asked)) {
+          const run = await tx.doc(RunDoc, id, asked.runId, null);
+          run.asked = { ...run.asked, [question]: asked };
+        }
+        questions.asked = {};
+      }
       const kept = await tx.doc(ConversationDoc, id);
+      // A steer joins the run going on, read in this commit, so it is the run pi joins it to.
+      const first = live.run?.inputs[0];
+      const joined =
+        whenBusy === "steer" && first !== undefined
+          ? kept.inputs?.[first]
+          : undefined;
+      Object.assign(
+        await tx.doc(RunDoc, id, runId, null),
+        start,
+        { model },
+        joined === undefined ? {} : { joined },
+      );
       kept.runs.push(runId);
       kept.inputs = { ...kept.inputs, [submission]: runId };
       tracing.start(id, runId);
@@ -468,14 +574,24 @@ export async function openRuntime({
   }
 
   /**
-   * Keep what the conversation had spent when its run going on started, once, before that run's first model request: a
-   * run's usage is what it spends after. A queued run is admitted while another goes on, so its admission is not its
-   * start.
+   * Before each model request of the run going on. Keep what the conversation had spent when it started, once, before
+   * its first request: a run's usage is what it spends after; a queued run is admitted while another goes on, so its
+   * admission is not its start. And stop it when a person stopped it: kept before pi aborts it, so a crash between
+   * stops it here, at its next request.
    */
   async function started(id: ConversationId, reader: DocumentReader) {
     const runId = await runGoingOn(reader, id, context);
     if (runId === undefined) return;
-    if ((await reader.snapshot(RunDoc, id, runId, context))?.spent) return;
+    const run = await reader.snapshot(RunDoc, id, runId, context);
+    if (run?.stopped) {
+      // As the stop does: the conversation's abort, which withdraws the runs queued behind it too. Not awaited: it waits
+      // for this very task to end, which waits on this hook.
+      void harness
+        .conversation(id, context)
+        .then((conversation) => conversation?.abort(context));
+      return;
+    }
+    if (run?.spent) return;
     await harness.commit(async (tx) => {
       const run = await tx.doc(RunDoc, id, runId, null);
       // As plain JSON: pi's usage is a document of its own.
@@ -616,41 +732,59 @@ export async function openRuntime({
         waits = true;
         return { status: "interrupted", interrupts: followed.interrupts };
       }
-      const { settled } = followed;
-      if (settled.status !== "done") {
-        // A run nobody attends stopped on its questions; a steer that joined it fails with them too.
-        const asked = await waitingOf(conversation.id, runId);
-        if (asked.length > 0) throw unattended(agent.name, runId, asked);
-        throw new RunFailed(
-          settled.reason,
-          `agent "${agent.name}": the run ended with no answer (${settled.reason})`,
-        );
-      }
-      const outcome = await outcomeOf(
-        conversation,
-        settled,
-        submitTool,
-        context,
-      );
-      if (!agent.output)
-        return {
-          status: "done",
-          result: (outcome.answer
-            ? answerText(outcome.answer)
-            : "") as RunResult<O>,
-        };
-      if (!outcome.submitted)
-        throw new RunFailed(
-          "no_submit",
-          `agent "${agent.name}": the run ended with no ${submitTool}`,
-        );
       return {
         status: "done",
-        result: outcome.submitted.value as RunResult<O>,
+        result: (await endOf(
+          agent,
+          conversation,
+          runId,
+          followed.settled,
+        )) as RunResult<O>,
       };
     } finally {
       if (!waits) await ended(conversation, runId, key, onUsage, onMessages);
     }
+  }
+
+  /**
+   * What a settled run gave: its result, its answer as text or its output, or `RunFailed` with why it has none. A run a
+   * person stopped is `stopped`; a run nobody attends that stopped on its questions fails with them, as a steer that
+   * joined it does.
+   */
+  async function endOf(
+    agent: AnyAgent,
+    conversation: Conversation,
+    runId: string,
+    settled: SettledSubmissionRecord,
+  ): Promise<unknown> {
+    if (settled.status !== "done") {
+      const kept = await harness.snapshot(
+        RunDoc,
+        conversation.id,
+        runId,
+        context,
+      );
+      if (kept?.stopped) {
+        throw new RunFailed(
+          "stopped",
+          `agent "${agent.name}": run "${runId}" was stopped`,
+        );
+      }
+      const asked = await waitingOf(conversation.id, runId);
+      if (asked.length > 0) throw unattended(agent.name, runId, asked);
+      throw new RunFailed(
+        settled.reason,
+        `agent "${agent.name}": the run ended with no answer (${settled.reason})`,
+      );
+    }
+    const outcome = await outcomeOf(conversation, settled, submitTool, context);
+    if (!agent.output) return outcome.answer ? answerText(outcome.answer) : "";
+    if (!outcome.submitted)
+      throw new RunFailed(
+        "no_submit",
+        `agent "${agent.name}": the run ended with no ${submitTool}`,
+      );
+    return outcome.submitted.value;
   }
 
   /** What is given when a run ends: its trace ends, its usage and messages go to the host, its resources go. */
@@ -777,11 +911,276 @@ export async function openRuntime({
       : { items };
   }
 
+  /** Each run's submission, from the conversation's inputs. */
+  function submissionsOf(kept: ConversationState) {
+    const bySubmission = new Map<string, SubmissionId>();
+    for (const [submission, runId] of Object.entries(kept.inputs ?? {}))
+      bySubmission.set(runId, Number(submission) as SubmissionId);
+    return bySubmission;
+  }
+
+  /**
+   * A reader of a conversation's runs: each document read once, when a run first needs it, so a run reads only its own
+   * and the runs after it, which may have joined it or end it.
+   */
+  async function runsOf(id: ConversationId) {
+    const kept = await harness.snapshot(ConversationDoc, id, context);
+    if (!kept) throw new Error(`conversation ${id}: its document is missing`);
+    const conversation = await harness.conversation(id, context);
+    if (!conversation) throw new Error(`conversation ${id}: it is missing`);
+    const agent = byName.get(kept.agent);
+    if (!agent)
+      throw new Error(
+        `agent "${kept.agent}" was not given when the runtime opened`,
+      );
+    const live = (await harness.snapshot(LiveDoc, id, context)) ?? {};
+    const asked =
+      (await harness.snapshot(InterruptsDoc, id, context))?.asked ?? {};
+    const going = new Set(live.run?.inputs ?? []);
+    const waiting = paused(asked, live) !== undefined;
+    const submissions = submissionsOf(kept);
+    const records = new Map<string, SubmissionRecord>();
+    const docs = new Map<string, RunState | undefined>();
+
+    async function recordOf(runId: string) {
+      let record = records.get(runId);
+      if (record) return record;
+      const submission = submissions.get(runId);
+      const handle =
+        submission === undefined
+          ? undefined
+          : await harness.submission(submission, context);
+      if (!handle) throw new Error(`run "${runId}": its submission is missing`);
+      record = await handle.status(context);
+      records.set(runId, record);
+      return record;
+    }
+
+    async function docOf(runId: string) {
+      if (!docs.has(runId))
+        docs.set(runId, await harness.snapshot(RunDoc, id, runId, context));
+      return docs.get(runId);
+    }
+
+    /** The input of a run queued behind another, from pi's inbox, which keeps it until it is placed. */
+    async function queuedInput(submission: SubmissionId) {
+      const inbox = await harness.snapshot(InboxDoc, id, context);
+      const item = inbox?.items.find((each) => each.id === submission);
+      if (item?.mode !== "steer" && item?.mode !== "followUp") return undefined;
+      return userInputText(item.content as UserMessage["content"]);
+    }
+
+    async function infoAt(index: number): Promise<RunInfo> {
+      const runId = kept!.runs[index]!;
+      const record = await recordOf(runId);
+      const doc = await docOf(runId);
+      const later = kept!.runs.slice(index + 1);
+      const steers: RunInfo["steers"] = [];
+      let next: EntryId | undefined;
+      for (const other of later) {
+        const its = await docOf(other);
+        if (its?.joined === runId) {
+          const entry = (await recordOf(other)).entry;
+          steers.push({
+            runId: other,
+            ...(entry === undefined ? {} : { entry }),
+          });
+        } else if (its?.joined === undefined && next === undefined) {
+          next = (await recordOf(other)).entry;
+        }
+      }
+      const placed =
+        doc?.joined === undefined && record.entry !== undefined
+          ? record.entry
+          : undefined;
+      const questions = Object.entries({
+        ...doc?.asked,
+        ...Object.fromEntries(
+          Object.entries(asked).filter(([, each]) => each.runId === runId),
+        ),
+      }).map(([question, each]) => questionOf(question, each));
+      const input =
+        record.status === "queued" ? await queuedInput(record.id) : undefined;
+      const info = {
+        runId,
+        ...(input === undefined ? {} : { input }),
+        ...(doc?.joined === undefined ? {} : { joined: doc.joined }),
+        steers,
+        questions,
+        ...(placed === undefined
+          ? {}
+          : {
+              entries: {
+                first: placed,
+                ...(next === undefined || placed === undefined
+                  ? {}
+                  : { last: (next - 1) as EntryId }),
+              },
+            }),
+      };
+      if (isSettled(record)) {
+        try {
+          await endOf(agent!, conversation!, runId, record);
+          return { ...info, status: "done" };
+        } catch (error) {
+          if (!(error instanceof RunFailed)) throw error;
+          return error.reason === "stopped"
+            ? { ...info, status: "stopped" }
+            : {
+                ...info,
+                status: "failed",
+                failure: { reason: error.reason, message: error.message },
+              };
+        }
+      }
+      if (!going.has(record.id)) return { ...info, status: "pending" };
+      return { ...info, status: waiting ? "interrupted" : "running" };
+    }
+
+    return { runIds: kept.runs, infoAt };
+  }
+
+  async function runs(
+    key: string,
+    { limit = 20, cursor }: RunsOptions = {},
+  ): Promise<Page<RunInfo, Cursor> | undefined> {
+    checkLimit(limit);
+    const id = await idOf(key);
+    if (id === undefined) return undefined;
+    const { runIds, infoAt } = await runsOf(id);
+    let at = runIds.length;
+    if (cursor !== undefined) {
+      const { before } = cursor;
+      if (
+        typeof before !== "number" ||
+        !Number.isSafeInteger(before) ||
+        before < 0 ||
+        before > runIds.length
+      )
+        throw new StorageRequestError("Invalid runs cursor");
+      at = before;
+    }
+    const items: RunInfo[] = [];
+    while (at > 0 && items.length < limit) items.push(await infoAt(--at));
+    return at > 0 ? { items, next: { before: at } } : { items };
+  }
+
+  async function runOf(key: string, runId: string) {
+    const id = await idOf(key);
+    if (id === undefined) return undefined;
+    const { runIds, infoAt } = await runsOf(id);
+    const index = runIds.indexOf(runId);
+    return index === -1 ? undefined : infoAt(index);
+  }
+
+  async function stop(key: string, runId: string) {
+    const id = await idOf(key);
+    if (id === undefined) return undefined;
+    const conversation = await harness.conversation(id, context);
+    if (!conversation) throw new Error(`conversation "${key}": it is missing`);
+    // Kept first, in one commit with what it reads: the run going on stops with every run not ended; a queued one alone.
+    const found = await harness.commit(async (tx) => {
+      const record = await tx.submissionByRequest(id, runId);
+      if (!record) return undefined;
+      if (isSettled(record)) return { ended: true as const };
+      const going =
+        (await tx.doc(LiveDoc, id)).run?.inputs.includes(record.id) ?? false;
+      const stopping = [runId];
+      if (going) {
+        for (const other of (await tx.doc(ConversationDoc, id)).runs) {
+          const its = await tx.submissionByRequest(id, other);
+          if (other !== runId && its && !isSettled(its)) stopping.push(other);
+        }
+      }
+      for (const each of stopping)
+        (await tx.doc(RunDoc, id, each, null)).stopped = true;
+      return { ended: false as const, going, submission: record.id };
+    }, context);
+    if (!found) return undefined;
+    if (found.ended) return "ended" as const;
+    if (found.going) {
+      await conversation.abort(context);
+    } else {
+      const queued = await harness.submission(found.submission, context);
+      // Placed since it was read: it is the run going on now, so it stops as one.
+      if ((await queued?.abort(context)) === "already_placed")
+        return stop(key, runId);
+    }
+    return "stopped" as const;
+  }
+
+  async function watch(
+    key: string,
+    { signal }: { signal?: AbortSignal } = {},
+  ): Promise<AsyncIterable<ConversationView> | undefined> {
+    const id = await idOf(key);
+    if (id === undefined) return undefined;
+    const conversation = await harness.conversation(id, context);
+    if (!conversation) throw new Error(`conversation "${key}": it is missing`);
+    const { context: watching, cancel } = withCancel(
+      signal ? withAbortSignal(signal, context) : context,
+    );
+    const view = await conversation.watch(watching);
+    const asked = await harness.watchDoc(InterruptsDoc, id, watching);
+    if (!asked)
+      throw new Error(`conversation "${key}": its questions are missing`);
+    return views(id, view, asked, cancel);
+  }
+
+  /** A conversation's views, from its watch and its questions' watch: the newest when the reader asks. */
+  async function* views(
+    id: ConversationId,
+    view: WatchHandle<PiConversationView>,
+    asked: WatchHandle<unknown>,
+    cancel: () => void,
+  ): AsyncGenerator<ConversationView> {
+    let changed = true;
+    let ended = false;
+    let wake = () => {};
+    const changes = async (call: { kind: string }) => {
+      if (call.kind !== "value") return;
+      changed = true;
+      wake();
+    };
+    view.start(changes);
+    asked.start(changes);
+    for (const watched of [view, asked]) {
+      void watched.closed.then(() => {
+        ended = true;
+        wake();
+      });
+    }
+    try {
+      for (;;) {
+        if (!changed) {
+          if (ended) return;
+          await new Promise<void>((resolve) => (wake = resolve));
+          continue;
+        }
+        changed = false;
+        const { entries, before, docs } = view.value;
+        yield {
+          info: await infoOf(harness, id),
+          entries: entries.filter((entry) => !SystemEntry.is(entry)),
+          ...(before === undefined ? {} : { before }),
+          live: (docs[LiveDoc.definition.kind] ?? {}) as LiveState,
+        };
+      }
+    } finally {
+      cancel();
+      await Promise.all([view.stop(), asked.stop()]);
+    }
+  }
+
   return {
     run,
     conversation,
     entries,
     conversations,
+    runs,
+    runOf,
+    stop,
+    watch,
     async close() {
       await tracing.closeAll();
       await harness.close(context);
@@ -813,7 +1212,12 @@ async function infoOf(
     ...(kept.context === undefined ? {} : { context: kept.context }),
   };
   if (live.run === undefined) {
-    const failure = live.runFailure;
+    // A run a person stopped ended as they asked: the conversation is idle, not in error.
+    const failure =
+      live.runFailure &&
+      !(await stoppedAll(reader, id, kept, live.runFailure.inputs))
+        ? live.runFailure
+        : undefined;
     return failure === undefined
       ? { ...made, status: "idle", interrupts: [] }
       : {
@@ -835,6 +1239,42 @@ async function infoOf(
     ...(runId === undefined ? {} : { runId }),
     interrupts: waiting ?? [],
   };
+}
+
+/** Whether a submission has settled: answered, or not. */
+function isSettled(
+  record: SubmissionRecord,
+): record is SettledSubmissionRecord {
+  return record.status === "done" || record.status === "unanswered";
+}
+
+/** A kept question as a client reads it: what was asked, and the answer once given. */
+function questionOf(id: string, asked: Asked): Question {
+  return {
+    id,
+    callId: asked.callId,
+    value: asked.value,
+    ...(Object.hasOwn(asked, "answer") ? { answer: asked.answer! } : {}),
+    ...(asked.error === undefined ? {} : { error: asked.error }),
+  };
+}
+
+/** Whether a person stopped the runs of these inputs. */
+async function stoppedAll(
+  reader: DocumentReader,
+  id: ConversationId,
+  kept: ConversationState,
+  inputs: readonly SubmissionId[],
+) {
+  for (const input of inputs) {
+    const runId = kept.inputs?.[input];
+    const run =
+      runId === undefined
+        ? undefined
+        : await reader.snapshot(RunDoc, id, runId, context);
+    if (!run?.stopped) return false;
+  }
+  return inputs.length > 0;
 }
 
 /** Refuse a run that gives a conversation another agent, caller or context than its first run made it with. */
@@ -871,6 +1311,7 @@ function pending(
       : [
           {
             id,
+            callId: question.callId,
             value: question.value,
             ...(question.error === undefined ? {} : { error: question.error }),
           },

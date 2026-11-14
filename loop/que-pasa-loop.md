@@ -56,11 +56,14 @@ A conversation is pi's conversation, and a run is pi's submission: LangGraph's t
 - run: one input on a conversation to its result, by its id in the conversation (`runId`, pi's `requestId`)
 	- model: the run's, or the agent's, for a run that starts at once: set on the conversation in the commit that admits it, so the model and the input land together. pi has no model per input, so a run that waits or joins runs on the conversation's model when it starts, the model of the run before it, and gives none (`model` only with `reject`); its document says which
 	- attended: whether someone attends it, to answer what its calls ask (`attended`, set by whoever starts it; nobody by default; the server's runs are attended). Kept in the commit that admits it
-	- questions: what its calls asked, and the answers, kept on the conversation by the question's id, with the run that asked: one run waits at a time, and a steer that joined it sees the same. A run that starts at once starts with none
+	- questions: what its calls asked, and the answers, kept on the conversation by the question's id, with the run that asked: one run waits at a time, and a steer that joined it sees the same. A run that starts at once starts with none: the questions before it move to the runs that asked them, so a later call that the model gives the same call id asks afresh, and a run read later shows what it asked
+	- stopped: `runtime.stop(key, runId)`, as a person asks, LangGraph's cancel. The run going on stops at once, with the steers that joined it and the runs queued behind it, as pi's `abort()` does: nothing the person asked for goes on. A queued run alone is withdrawn, and the rest go on. Kept on each run it stops before pi aborts it; a run that has ended stays as it ended
+		- a call that runs stops at the abort: its tool gets `runtime.signal`, and the call does not wait for a tool that does not heed it
+		- a stopped run ends `stopped`, not failed: `run()` rejects `RunFailed` with `stopped`, and the conversation is idle, not in error
 	- result: read from its own submission, its answer entry and the submit result that answers it, never the conversation's last answer
 	- usage: what the conversation spent from the run's start, before its first model request, to the next run's start, or to now. A queued run is admitted while another goes on, so its admission is not its start; a steer that joined spent nothing of its own
 	- trace: its own, tagged with the conversation's key and its run id
-- not built: stopping the run going on for a new input (LangGraph's `interrupt` and `rollback`), a run in the background with join and cancel by its id, a `beforeAgent` per run, and reading a conversation from another process
+- not built: stopping the run going on for a new input (LangGraph's `interrupt` and `rollback`), a run in the background with join by its id, a `beforeAgent` per run, and reading a conversation from another process
 
 ## States
 
@@ -74,7 +77,7 @@ A run moves from admitted to settled, through model calls and tool calls; pi mov
 | waiting | the questions its calls asked, kept; each call that asked, held before its tool's code | every question is answered: to tooling. Nobody attends: to settled, failed | `runtime.run` with `{ resume }`; for a run nobody attends, the call |
 | settled | its answer or its failure; the run's result is read from its submission | (terminal) | pi; `runtime.run` reads it |
 
-- settled, as: answered (text), submitted (the output), or failed: `no_submit` after two reminders, `needs_connection` or `needs_answer` for a question in a run nobody attends, or pi's reason (`aborted`, `model_error`, `restart_limit` and the others)
+- settled, as: answered (text), submitted (the output), stopped by a person, or failed: `no_submit` after two reminders, `needs_connection` or `needs_answer` for a question in a run nobody attends, or pi's reason (`aborted`, `model_error`, `restart_limit` and the others)
 - a conversation's next run: admitted once the run before it has settled, and generating with the whole history
 - middleware ([[que-pasa-middleware]]): `beforeAgent` runs once before the conversation is made, `systemPrompt` before each request in generating, and `wrapToolCall` around each call in tooling, where approval asks. Summarize and limits: not built
 	- a gate, a route or a verifier in it can be a decision model call: a decision model picks one option from a fixed set, after a check that its answers stay the same when the order of the choices changes or the input is given again. Not built
@@ -85,17 +88,17 @@ A tool call that stops before its tool's code runs to ask a person, and goes on 
 - asked by: the call's check of its tool's connections (a missing login: "connect it"), and a middleware's `wrapToolCall` (`request.interrupt(value, answer?)`, such as an approval)
 	- only before the tool's code runs: after it starts, `interrupt` throws. So nothing has happened when a call waits, whatever the tool's `replay`
 	- a question's id: `<call id>:<asker>:<n>`, the n-th question of that asker in the call, so a rerun asks by the same id
-- kept: each question, and then its answer, on the conversation. The wait itself is in memory: a call that reruns after a restart finds its question, and waits again or goes on with its answer
+- kept: each question, and then its answer, on the conversation, and on the run that asked once a later run starts. The wait itself is in memory: a call that reruns after a restart finds its question, and waits again or goes on with its answer
 	- a crash while a call waits counts toward pi's restart limit (5); a clean close does not
 - answered: `runtime.run(agent, { resume: { [id]: answer } }, { ...same runId })`, in one commit, by the run that asked or a steer that joined it; an answer to a question the run does not wait on is refused, `not_interrupted`
 	- an answer that does not fit the asker's `answer` schema is refused by the call: kept as the question's `error`, and the question is asked again by the same id
-- given back: `run()` gives `interrupted`, with the questions, once the run waits and every running call of its round has asked; the same run id again gives the same questions
+- given back: `run()` gives `interrupted`, with the questions, each `{ id, callId, value, error? }`, once the run waits and every running call of its round has asked; the same run id again gives the same questions. `callId` is the call that waits, so a client shows the question on it
 - a run nobody attends: the call keeps its question and stops the run before its tool acts; the run fails, `needs_connection` for a login and `needs_answer` for anything else, with the questions. A steer that joined it fails the same, with the same questions: pi settles every input of a run with one outcome, and a question keeps every run of pi's run when it was asked
 - input while a run waits: as while it goes on, by its `whenBusy`. A steer joins it and gives back the same questions; a follow-up starts once the run is answered and ends. Not built: dropping the question for a new input
 
 ## Reading a conversation
 
-What a client reads of its conversations, as LangGraph's thread search, thread and thread state, in pi's words: three reads on the runtime, each from what pi keeps.
+What a client reads of its conversations, as LangGraph's thread search, thread, thread state and runs, in pi's words: reads on the runtime, each from what pi keeps.
 - `runtime.conversations(caller, { agents, limit, cursor })`: the caller's conversations, the newest made first, a page at a time, pi's `Page` (`items`, `next`)
 	- held by the caller index: a session document per caller id, its conversations in the order they were made, appended in the commit that makes each, so a page reads the caller's and no other's
 	- `agents`: only those of these agents; `limit`: 20 when left out; `cursor`: the page before's `next`
@@ -107,7 +110,13 @@ What a client reads of its conversations, as LangGraph's thread search, thread a
 - `runtime.entries(key, query, limit, cursor)`: a page of its entries, pi's transcript records, as pi's `conversation.entries()` gives them: `query` is pi's `EntryQuery` (`order`, newest first by default; `minEntryId`, `maxEntryId`)
 	- without the system entries: the instructions and tool definitions are the deployment's. A client sees the messages, as `onMessages` gives them
 	- a page is filled to `limit` while the scan has more, and `next` is pi's cursor, set only while it does: so pi's `ConversationTranscript`, which pages by entry ids and ends on no `next`, pages it as it pages pi's own
-- a key no run made: `conversation` and `entries` give undefined. A cursor that is not a page's `next` of the same query is refused, pi's `StorageRequestError`
+- `runtime.runs(key, { limit, cursor })` and `runtime.runOf(key, runId)`: its runs, the newest admitted first, LangGraph's runs of a thread: each `{ runId, status, failure?, input?, joined?, steers, questions, entries? }`
+	- `status`: `pending` while queued, `running`, `interrupted` while it waits on questions, then `done`, `failed` (with `failure`, as `RunFailed` gives it) or `stopped`
+	- `entries`: its range, `{ first, last? }`, inclusive: from its input's entry to the one before the next run's input, open while it is the newest, so its entries are `runtime.entries` over the range. A steer has none: its input is in the run it `joined`, whose `steers` give each steer's entry
+	- `input`: its text while it is queued, from pi's inbox, which keeps it until it is placed
+	- `questions`: what its calls asked, and the answers, also after it ended
+- `runtime.watch(key, { signal })`: the conversation as it changes, after pi's `watch()`: a value at once, then one after each change, the newest only when the reader is slower, until the signal. Each value is how it stands, a window of its newest entries without the system entries, and pi's live state, which holds the answer being written and the running tool calls
+- a key no run made: these give undefined. A cursor that is not a page's `next` of the same query is refused, pi's `StorageRequestError`
 
 ## Invariants
 
@@ -122,6 +131,8 @@ What holds in every state of every run. Each is held by construction, and checke
 | a finished step is never done twice | pi's checkpoint per step; a marker kept just before a tool's code runs, so a tool not marked `replay: "safe"` that started never runs again | `crash.test.ts`: mid tool, mid model request, after the submit |
 | a call waits only before its tool acts, so a wait is safe to take up again whatever the tool's replay | `interrupt` refused once the tool started; to pi every que-pasa tool is replay-safe, so a waiting call reruns, and que-pasa keeps the tool's own rule | `crash.test.ts`: killed while a call waits, then answered: the tool runs once |
 | a person is asked once: a question answered is never asked again | the question and its answer kept on the conversation, by an id the rerun asks by again | `crash.test.ts`: killed after the answer, before the tool ran: it goes on, asking nobody |
+| an answer is the call's that it was given to: a later call is never answered by an earlier one | a run that starts at once moves the questions before it to the runs that asked them, so a call id the model gives again asks afresh | `runs.test.ts`: approved, then the same call id in the next run: asked again, sent once |
+| a stopped run does nothing more the person asked for | the stop kept on each run it stops, then pi's abort of the conversation, which withdraws what is queued; the call ends at the abort, whatever its tool does | `runs.test.ts`: the run going on, one that waits on a question, a queued one alone, and the run going on with three queued behind it |
 | a run keeps what it was started with: input and model | the run document and the model, written once, in the commit that admits the run | `runtime.test.ts`, `crash.test.ts`: a run started again keeps its model, also mid a conversation's second run |
 | a conversation keeps the middleware state it was made with: its system prompt is the same in every run and every process | each `beforeAgent` result kept in a `MiddlewareDoc`, in the commit that makes the conversation; a section renders from it, never from memory | `crash.test.ts`: the memory file changed, and the resumed process's model gets the text the run started with |
 | a tool's code runs only with a login for each connection it uses | the call's check before the tool's code: a run someone attends asks for a missing one; a shared login the caller may not use gives the model no access | `runtime.test.ts`: asked, answered while still missing, asked again, then connected |
@@ -151,16 +162,18 @@ One runtime per process owns its storage: `openRuntime({ storage, models, agents
 | mid tool, `replay: "safe"` | the tool runs again, with its conversation's context | five crashes in a row (pi's restart limit) stop it, and the model gets an error result |
 | after the submit | the run is settled | `run(runId)` gives back the result, with no model call |
 | a follow-up queued, mid the run before it | the queue is kept; the run goes on, then the follow-up starts | each runs once, in order; `run(runId)` of either gives its result |
+| after a stop is kept, before pi's abort | the run goes on | its next model request finds it stopped and aborts it |
+| mid tool, a chat following the run | the tool runs again (`replay: "safe"`) | a chat client that reconnects to the new process gets the run replayed, then live, to its end, the same message its history reads back |
 
 `loop/crash.test.ts` kills a real process at each point and opens the SQLite file again in a new one.
 
 ## What it leaves
 
 A run gives back its outcome, its usage, its conversation and its trace.
-- its outcome, as LangGraph's `invoke`: `{ status: "done", result }`, the output its submit gave or its answer as text, or `{ status: "interrupted", interrupts }`, the questions it waits on, each `{ id, value, error? }`. `signal` stops a run: the conversation is aborted, and `run` rejects with the signal's reason
+- its outcome, as LangGraph's `invoke`: `{ status: "done", result }`, the output its submit gave or its answer as text, or `{ status: "interrupted", interrupts }`, the questions it waits on, each `{ id, callId, value, error? }`. `signal` stops a run: the conversation is aborted, and `run` rejects with the signal's reason
 	- a refusal before the run is admitted: `RunRefused`, with its reason: `other_agent`, `other_caller`, `other_context`, `busy`, `needs_connection` (`ConnectionsMissing`, with the connections the caller has no login for, for a run nobody attends), `connection_failed`, or `not_interrupted` (answers to a question the run does not wait on). Nothing of the run is kept
 	- `onStarted`: called once the run is admitted, or found admitted, and its answers kept; after it, `run` gives the outcome or `RunFailed`, never `RunRefused`. The server waits for it to answer 200 ([[que-pasa-server]])
-	- a run that ended with no result: `RunFailed`, with pi's reason, `no_submit`, or `needs_connection` and `needs_answer` with the `interrupts` a run nobody attends stopped on
+	- a run that ended with no result: `RunFailed`, with pi's reason, `no_submit`, `stopped` for a run a person stopped, or `needs_connection` and `needs_answer` with the `interrupts` a run nobody attends stopped on
 - its usage: `onUsage`, once, when it ends, answered or not: what the run spent, tokens and cost per `provider/model-id`, and per tool. Not while it waits
 - its conversation: `onMessages`, once, when it ends, answered or not, as pi-ai's messages in order, up to the run's end: every run's input, each assistant message with its tool calls, each tool result, the reminders and the submits. Not the system prompt
 - its trace (`loop/trace.ts`): OpenTelemetry spans in the GenAI conventions (semconv 1.43.0), made live from pi's hooks, through `@opentelemetry/api` only

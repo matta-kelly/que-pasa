@@ -23,8 +23,9 @@ A tool is a name, a description, the input it takes and what it does; it gets wh
 	- `run(input, runtime)`: what it does
 	- uses: the resources it asks its run for, if any (see [[#Reaching an outside system]])
 	- `replay: "safe"`: a call a crash cut off may run again (see [[#How a run calls it]])
-- what it gets from a run: `runtime.caller`, who the run acts for, `runtime.context`, the JSON the host gave the run, and `runtime.use(resource)`, the run's value of a resource it uses
-	- both come from the run's document, never from the tool's arguments, so the model cannot say whom it acts for
+- what it gets from a run: `runtime.caller`, who the run acts for, `runtime.context`, the JSON the host gave the run, `runtime.use(resource)`, the run's value of a resource it uses, and `runtime.signal`, aborted when the call is
+	- the caller and the context come from the run's document, never from the tool's arguments, so the model cannot say whom it acts for
+	- the signal: aborted when a person stops the run, or the host closes. A tool that waits on something long passes it on, as LangChain's `config.signal`; the call ends at the abort whatever the tool does, so a stop never waits on a tool
 	- an agent calling another agent passes the caller through the run, not through a tool's arguments. Not built
 - an agent is given its tools explicitly, and can call those and no others
 
@@ -41,7 +42,7 @@ A tool reaches what it acts on through a resource, which the host gives each con
 	- a tool lists it in `uses`, as any resource; an agent's connections are the ones its tools use
 	- the deployment hands over the logins, from its control plane: `openRuntime({ credentialFor })`, for a connection and a caller. A tool that uses a connection, on a runtime with none, fails the runtime's open
 	- the guard: before a tool's code runs, its call checks the caller has a login for each connection the tool uses
-		- a run someone attends: a missing `user` login is asked for, with the interrupt ([[que-pasa-loop#The interrupt]]): "connect it", which the server gives with the deployment's page ([[que-pasa-server]]). Once answered it checks again, and asks again while the login is still missing
+		- a run someone attends: a missing `user` login is asked for, with the interrupt ([[que-pasa-loop#The interrupt]]): "connect it", which the server gives with the deployment's page ([[que-pasa-server]]). It takes LangChain's two plain decisions, as an approval does: `approve`, once connected, checks again, and asks again while the login is still missing; `reject`, not connecting it, ends the call with an error the model reads, and the tool never runs
 		- a missing `shared` login: the model is told it has no access, and nobody is asked, as the caller cannot fix it
 		- a run nobody attends: the credential gate at its start, as LangChain's before the first model turn, checks every login its agent's tools use, and refuses the run before anything of it is kept (`ConnectionsMissing`), as nobody could connect one later. It asks for every connection the tools use, also one this run would not: a chosen cost for one simple rule
 	- a login is asked for when a run starts, and when a call first needs it in a process; never kept. A login the service refuses: the connection's client, or the tool, throws `LoginRejected`, the run drops the connection, and the next call asks the deployment again

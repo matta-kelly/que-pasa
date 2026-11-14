@@ -47,6 +47,7 @@ function call<S extends z.ZodObject>(
   return tool.run(tool.schema.parse(input), {
     caller: { id: "test" },
     context: undefined as never,
+    signal: new AbortController().signal,
     use: async <T>(resource: Resource<T>) => {
       expect(resource).toBe(Sandbox);
       return given as T;

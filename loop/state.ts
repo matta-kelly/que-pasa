@@ -68,6 +68,15 @@ export type RunState = {
   identities?: Record<string, ServiceIdentity>;
   /** Whether someone attends it, to answer what it asks. Absent: nobody does. */
   attended?: boolean;
+  /** The run it joined, for a steer admitted while another went on: it starts no run of its own. */
+  joined?: string;
+  /** Set when a person stopped it, before pi aborts it: it ended as they asked, not as a failure. */
+  stopped?: true;
+  /**
+   * What its calls asked, and the answers, by the question's id: moved here from the conversation's questions when the
+   * next run starts, so a later call with the same call id asks afresh, and the run read later shows what it asked.
+   */
+  asked?: Record<string, Asked>;
 };
 
 /** A question a tool call asked, and its answer once given. */
@@ -103,8 +112,9 @@ export const RunDoc = defineDocFamily<RunState, null>({
 });
 
 /**
- * What a conversation's tool calls asked, by the question's id: kept, so a call that reruns after a restart finds its
- * answer. One run waits at a time, so these are the run going on's; a steer that joined it sees the same.
+ * What the calls of a conversation's newest run asked, by the question's id, and the answers: kept, so a call that
+ * reruns after a restart finds its answer. One run waits at a time, so these are its run's; a steer that joined it sees
+ * the same. A run that starts at once moves them to the runs that asked them.
  */
 export const InterruptsDoc = defineDoc<{ asked: Record<string, Asked> }>({
   kind: "que-pasa.interrupts",

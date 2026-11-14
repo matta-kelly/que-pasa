@@ -364,6 +364,7 @@ describe("the server's HTTP API", () => {
       interrupts: [
         {
           id: "call-1:connection-crm:0",
+          callId: "call-1",
           value: {
             type: "connection",
             name: "crm",
@@ -382,7 +383,7 @@ describe("the server's HTTP API", () => {
     const done = await wait_(server, "c", {
       agent: "seller",
       runId: "1",
-      command: { resume: { "call-1:connection-crm:0": "connected" } },
+      command: { resume: { "call-1:connection-crm:0": { type: "approve" } } },
     });
     expect(await done.json()).toMatchObject({
       status: "done",
@@ -392,7 +393,7 @@ describe("the server's HTTP API", () => {
     const late = await wait_(server, "c", {
       agent: "seller",
       runId: "1",
-      command: { resume: { "call-1:connection-crm:0": "again" } },
+      command: { resume: { "call-1:connection-crm:0": { type: "approve" } } },
     });
     expect([late.status, await errorOf(late)]).toEqual([
       409,
@@ -664,6 +665,7 @@ describe("the server's operations, for a way in in the same process", () => {
       interrupts: [
         {
           id: "call-1:connection-crm:0",
+          callId: "call-1",
           value: {
             type: "connection",
             name: "crm",
@@ -678,7 +680,7 @@ describe("the server's operations, for a way in in the same process", () => {
       server.run(request("matt"), "seller", {
         conversation: "c",
         runId: "1",
-        resume: { "call-1:connection-crm:0": null },
+        resume: { "call-1:connection-crm:0": { type: "approve" } },
       }),
     ).resolves.toEqual({ status: "done", result: "You are matt-at-crm." });
   });

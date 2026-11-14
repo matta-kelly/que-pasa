@@ -1,5 +1,9 @@
 import type { Context } from "@earendil-works/chord/context";
-import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
+import type {
+  AssistantMessage,
+  Message,
+  UserMessage,
+} from "@earendil-works/pi-ai";
 import {
   type Cursor,
   type EntryId,
@@ -89,8 +93,11 @@ export async function entriesOf(
 
 /** The text of a user message. */
 export function userText(message: Message): string | undefined {
-  if (message.role !== "user") return undefined;
-  const { content } = message;
+  return message.role === "user" ? userInputText(message.content) : undefined;
+}
+
+/** The text of a user message's content, pi's input. */
+export function userInputText(content: UserMessage["content"]): string {
   return typeof content === "string"
     ? content
     : content

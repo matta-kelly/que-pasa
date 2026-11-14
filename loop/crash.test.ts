@@ -208,6 +208,20 @@ describe("a run killed at a crash point and opened again in a new process", () =
     expect(seen.ran).toEqual([]);
   });
 
+  it("killed mid tool: in the next process a chat client reconnects, and its stream replays the run, then follows it to the end", async () => {
+    const seen = await crashAndResume("chat");
+    expect(seen.value).toEqual({
+      parts: [
+        "step-start",
+        "step:output-available",
+        "step-start",
+        "submit:output-available",
+      ],
+      history: true,
+    });
+    expect(seen.ran).toEqual(["first", "first"]);
+  });
+
   it("a follow-up queued, killed while the run before it goes on: the next process runs both, in order, once each", async () => {
     const seen = await crashAndResume("queued");
     expect(seen.value).toEqual(done);

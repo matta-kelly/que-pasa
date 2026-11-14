@@ -85,6 +85,7 @@ function sendsQuote(...more: ReturnType<typeof fauxAssistantMessage>[]) {
 
 const question = {
   id: "q:human-in-the-loop:0",
+  callId: "q",
   value: {
     type: "tool_approval",
     name: "send_quote",

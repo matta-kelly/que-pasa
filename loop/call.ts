@@ -51,13 +51,26 @@ type AnyTool = Tool<z.ZodObject, Json | undefined>;
 /** The memo that marks a call's tool as started. */
 const startedMemo = "que-pasa.started";
 
-/** What a connection question asks: the person connects the service, then answers. Any answer checks again. */
+/**
+ * What a connection question asks: the person connects the service, then answers with LangChain's decisions, as an
+ * approval is answered: `approve` once connected, which checks again, or `reject`, not connecting it, which ends the
+ * call with an error the model reads.
+ */
 export type ConnectionQuestion = {
   type: "connection";
   name: string;
   description?: string;
   owner: Connection["owner"];
 };
+
+/** The answers a connection question takes. */
+const ConnectionAnswer = z.discriminatedUnion("type", [
+  z.strictObject({ type: z.literal("approve") }),
+  z.strictObject({
+    type: z.literal("reject"),
+    message: z.string().optional(),
+  }),
+]);
 
 /** A que-pasa tool as a pi tool, with the agent's middleware around each call. */
 export function toPiTool(
@@ -173,7 +186,17 @@ async function call(
             : { description: connection.description }),
           owner: connection.owner,
         };
-        await interrupt(`connection-${connection.name}`, question);
+        const answer = await interrupt(
+          `connection-${connection.name}`,
+          question,
+          ConnectionAnswer,
+        );
+        if (answer.type === "reject") {
+          return {
+            status: "error",
+            content: `No access to ${connection.name}: the person you act for did not connect it${answer.message ? `, and says: ${answer.message}` : ""}. Tell them; do not try again.`,
+          };
+        }
       }
     }
     await identify(api, runId, connection, resources, of, context);
@@ -182,6 +205,7 @@ async function call(
   const runtime: Runtime<Json | undefined> = {
     caller,
     context: made,
+    signal: context.abortSignal ?? new AbortController().signal,
     use: async (resource) => {
       if (!(tool.uses ?? []).some((used) => used.name === resource.name)) {
         throw new Error(
@@ -205,7 +229,11 @@ async function call(
       return { status: "error", content: message };
     }
     try {
-      const result = await tool.run(input, runtime);
+      // A stopped call ends now, whatever its tool does with the signal.
+      const result = await awaitWithContext(
+        Promise.resolve().then(() => tool.run(input, runtime)),
+        context,
+      );
       return {
         status: "success",
         content: typeof result === "string" ? result : JSON.stringify(result),

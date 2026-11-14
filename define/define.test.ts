@@ -13,6 +13,7 @@ const odoo = defineResource<{ login: string }>("odoo");
 const runtime = {
   caller,
   context: undefined,
+  signal: new AbortController().signal,
   use: () => Promise.reject(new Error("no resources here")),
 };
 
