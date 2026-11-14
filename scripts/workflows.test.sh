@@ -48,7 +48,7 @@ inputs() { sed -n 's/^inputs = \[\(.*\)\]/\1/p' "$root/crate.toml" | tr ',' '\n'
 test_the_workflow_starts_on_main_and_the_inputs() {
   name="the workflow starts on a push to main that changes crate.toml or an input, and by hand"
   given_workflow
-  want=$( (inputs; printf '%s\n' crate.toml scripts/dev-image-smoke.sh .github/workflows/dev-image.yml) | sort -u)
+  want=$( (inputs; printf '%s\n' crate.toml .github/workflows/dev-image.yml) | sort -u)
   then_is "the workflow file" "present" "$(present)" &&
     then_is "on.push.branches" "main" "$(block '^  push:' | sed -n 's/^ *branches: *\[\(.*\)\]$/\1/p')" &&
     then_is "on.push.paths" "$want" "$(list_under '^    paths:' | sort -u)" &&
