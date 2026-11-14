@@ -25,7 +25,7 @@ const models = createModels();
 models.setProvider(faux.provider);
 const model = `${faux.provider.id}:main`;
 const fallback = `${faux.provider.id}:fallback`;
-const caller = { id: "matt" };
+const caller = { id: "owner" };
 
 /** A tool that holds its call until the test lets it go, so a run stays going. */
 let release = () => {};

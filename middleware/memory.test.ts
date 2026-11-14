@@ -6,7 +6,7 @@ import type { Middleware } from "../define/index.ts";
 import { type FileBackend, local } from "../sandbox/index.ts";
 import { memory, memoryPrompt } from "./index.ts";
 
-const made = { conversation: "chat-1", caller: { id: "matt" } };
+const made = { conversation: "chat-1", caller: { id: "owner" } };
 
 let host = "";
 let backend: FileBackend;
@@ -17,7 +17,7 @@ beforeEach(() => {
   writeFileSync(join(host, "memory/craft.md"), "Keep it simple.\n\n");
   writeFileSync(
     join(host, "memory/team.md"),
-    "<!-- an authoring note -->Matt reviews.\n",
+    "<!-- an authoring note -->The owner reviews.\n",
   );
   backend = local({ root: host });
 });
@@ -45,7 +45,7 @@ describe("memory", () => {
     expect(prompt).toBe(
       memoryPrompt.replace(
         "{agent_memory}",
-        "memory/team.md\n\nMatt reviews.\n\nmemory/craft.md\n\nKeep it simple.",
+        "memory/team.md\n\nThe owner reviews.\n\nmemory/craft.md\n\nKeep it simple.",
       ),
     );
     expect(prompt).toMatch(/^<agent_memory>\n/);

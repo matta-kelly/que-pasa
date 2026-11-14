@@ -20,7 +20,7 @@ import {
 } from "../sandbox/index.ts";
 import { skills, skillsPrompt } from "./index.ts";
 
-const made = { conversation: "chat-1", caller: { id: "matt" } };
+const made = { conversation: "chat-1", caller: { id: "owner" } };
 
 let host = "";
 let backend: FileBackend;
@@ -204,7 +204,7 @@ describe("skills in a run", () => {
         .run(seller, "Quote acme.", {
           conversation: "c",
           runId: "1",
-          caller: { id: "matt" },
+          caller: { id: "owner" },
           onMessages: (all) => (messages = all),
         })
         .then(resultOf);
@@ -239,7 +239,7 @@ describe("skills in a run", () => {
         .run(seller, "Hi.", {
           conversation,
           runId,
-          caller: { id: "matt" },
+          caller: { id: "owner" },
         })
         .then(resultOf);
     };
@@ -287,7 +287,7 @@ describe("skills in a run", () => {
         .run(coder, "Read.", {
           conversation: "c",
           runId: "1",
-          caller: { id: "matt" },
+          caller: { id: "owner" },
           onMessages: (all) => (messages = all),
         })
         .then(resultOf);

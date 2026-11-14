@@ -8,7 +8,7 @@ import {
   defineTool,
 } from "./index.ts";
 
-const caller = { id: "matt" };
+const caller = { id: "owner" };
 const odoo = defineResource<{ login: string }>("odoo");
 const runtime = {
   caller,
@@ -29,7 +29,7 @@ describe("defineTool", () => {
   it("gives back the tool, and its run takes the input and the runtime", () => {
     expect(products.name).toBe("read_products");
     expect(products.uses).toEqual([odoo]);
-    expect(products.run({ sku: "A1" }, runtime)).toBe("A1 for matt");
+    expect(products.run({ sku: "A1" }, runtime)).toBe("A1 for owner");
   });
 
   it.each(["readProducts", "read-products", "1read", "", "a".repeat(65)])(

@@ -18,7 +18,7 @@ import {
 import { resultOf, scripted } from "./scripted.fixture.ts";
 
 const { faux, models, model } = scripted();
-const caller = { id: "matt" };
+const caller = { id: "owner" };
 
 /** A tool that holds its call until the test lets it go, so a run stays going. */
 let release = () => {};

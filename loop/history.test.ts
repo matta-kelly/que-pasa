@@ -18,8 +18,8 @@ import { openRuntime, type Runtime } from "./index.ts";
 import { resultOf, scripted } from "./scripted.fixture.ts";
 
 const { faux, models, model } = scripted();
-const matt = { id: "matt" };
-const sam = { id: "sam" };
+const owner = { id: "owner" };
+const stranger = { id: "stranger" };
 
 /** A tool that holds its call until the test lets it go, so a run stays going. */
 let release = () => {};
@@ -82,7 +82,7 @@ const calls = (name: string, id: string) =>
 async function answered(
   runtime: Runtime,
   conversation: string,
-  caller = matt,
+  caller = owner,
   agent = geo,
   runId = "1",
 ) {
@@ -112,11 +112,11 @@ describe("a caller's conversations", () => {
   it("are listed newest made first, a page at a time to the end, and never another caller's", async () => {
     const runtime = await open();
     for (const key of ["a", "b", "c"]) await answered(runtime, key);
-    await answered(runtime, "s", sam);
-    const first = await runtime.conversations(matt, { limit: 2 });
+    await answered(runtime, "s", stranger);
+    const first = await runtime.conversations(owner, { limit: 2 });
     expect(first.items.map((c) => c.conversation)).toEqual(["c", "b"]);
     expect(first.next).toBeDefined();
-    const second = await runtime.conversations(matt, {
+    const second = await runtime.conversations(owner, {
       limit: 2,
       cursor: first.next!,
     });
@@ -124,7 +124,7 @@ describe("a caller's conversations", () => {
       items: [expect.objectContaining({ conversation: "a" })],
     });
     expect(
-      (await runtime.conversations(sam)).items.map((c) => c.conversation),
+      (await runtime.conversations(stranger)).items.map((c) => c.conversation),
     ).toEqual(["s"]);
     expect(await runtime.conversations({ id: "nobody" })).toEqual({
       items: [],
@@ -134,9 +134,9 @@ describe("a caller's conversations", () => {
   it("are those of the agents asked for, and a page ends where none is left of them", async () => {
     const runtime = await open();
     await answered(runtime, "g1");
-    await answered(runtime, "c1", matt, chat);
+    await answered(runtime, "c1", owner, chat);
     await answered(runtime, "g2");
-    const page = await runtime.conversations(matt, {
+    const page = await runtime.conversations(owner, {
       agents: ["chat"],
       limit: 1,
     });
@@ -145,7 +145,7 @@ describe("a caller's conversations", () => {
     });
     expect(
       await all((cursor) =>
-        runtime.conversations(matt, {
+        runtime.conversations(owner, {
           agents: ["geo"],
           limit: 1,
           ...(cursor ? { cursor } : {}),
@@ -158,12 +158,12 @@ describe("a caller's conversations", () => {
     const runtime = await open();
     await answered(runtime, "a");
     await expect(
-      runtime.conversations(matt, { cursor: { before: 9 } }),
+      runtime.conversations(owner, { cursor: { before: 9 } }),
     ).rejects.toBeInstanceOf(StorageRequestError);
     await expect(
-      runtime.conversations(matt, { cursor: { after: 1 } }),
+      runtime.conversations(owner, { cursor: { after: 1 } }),
     ).rejects.toBeInstanceOf(StorageRequestError);
-    await expect(runtime.conversations(matt, { limit: 0 })).rejects.toThrow(
+    await expect(runtime.conversations(owner, { limit: 0 })).rejects.toThrow(
       /limit/,
     );
     await expect(runtime.entries("a", {}, 0)).rejects.toThrow(/limit/);
@@ -183,13 +183,13 @@ describe("a conversation, as it stands", () => {
     await runtime.run(geo, "Hi.", {
       conversation: "a",
       runId: "1",
-      caller: matt,
+      caller: owner,
       context: { team: "ops" },
     });
     expect(await runtime.conversation("a")).toEqual({
       conversation: "a",
       agent: "geo",
-      caller: matt,
+      caller: owner,
       context: { team: "ops" },
       status: "idle",
       interrupts: [],
@@ -203,7 +203,7 @@ describe("a conversation, as it stands", () => {
     const going = runtime.run(chat, "Hold.", {
       conversation: "a",
       runId: "1",
-      caller: matt,
+      caller: owner,
     });
     await holding;
     expect(await runtime.conversation("a")).toMatchObject({
@@ -222,7 +222,7 @@ describe("a conversation, as it stands", () => {
     const options = {
       conversation: "a",
       runId: "1",
-      caller: matt,
+      caller: owner,
       attended: true,
     };
     const outcome = await runtime.run(chat, "Send.", options);
@@ -251,13 +251,13 @@ describe("a conversation, as it stands", () => {
       fauxAssistantMessage([], { stopReason: "error", errorMessage: "down" }),
     ]);
     await expect(
-      runtime.run(geo, "Hi.", { conversation: "a", runId: "1", caller: matt }),
+      runtime.run(geo, "Hi.", { conversation: "a", runId: "1", caller: owner }),
     ).rejects.toMatchObject({ reason: "model_error" });
     expect(await runtime.conversation("a")).toMatchObject({
       status: "error",
       runFailure: { reason: "model_error", detail: expect.any(String) },
     });
-    await answered(runtime, "a", matt, geo, "2");
+    await answered(runtime, "a", owner, geo, "2");
     const kept = await runtime.conversation("a");
     expect(kept).toMatchObject({ status: "idle" });
     expect(kept).not.toHaveProperty("runFailure");
@@ -273,7 +273,7 @@ describe("a conversation's entries", () => {
     const first = runtime.run(chat, "One.", {
       conversation: "a",
       runId: "1",
-      caller: matt,
+      caller: owner,
     });
     await holding;
     release();
@@ -281,7 +281,7 @@ describe("a conversation's entries", () => {
     await runtime.run(chat, "Two.", {
       conversation: "a",
       runId: "2",
-      caller: matt,
+      caller: owner,
       onMessages: (all) => (messages = all),
     });
     return messages;

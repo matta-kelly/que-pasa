@@ -40,7 +40,7 @@ beforeAll(() => {
 });
 afterEach(() => exporter.reset());
 
-const caller = { id: "matt" };
+const caller = { id: "owner" };
 const verdict = z.object({
   verdict: z.enum(["done", "raise"]),
   note: z.string(),
@@ -149,7 +149,7 @@ describe("a run's trace", () => {
       "que_pasa.run.id": "run-1",
       "gen_ai.provider.name": provider,
       "gen_ai.request.model": modelId,
-      "enduser.id": "matt",
+      "enduser.id": "owner",
       "que_pasa.resumed": false,
     });
     expect(run.attributes["gen_ai.usage.input_tokens"]).toBeGreaterThan(0);

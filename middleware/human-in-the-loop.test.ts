@@ -18,7 +18,7 @@ import { resultOf, scripted } from "../loop/scripted.fixture.ts";
 import { humanInTheLoop } from "./index.ts";
 
 const { faux, models, model } = scripted();
-const caller = { id: "matt" };
+const caller = { id: "owner" };
 
 /** What the gated tool was sent, in order. */
 let sent: string[] = [];

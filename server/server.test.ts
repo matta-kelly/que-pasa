@@ -105,7 +105,7 @@ afterEach(async () => {
   loop = undefined;
 });
 
-/** A server on a fresh runtime, with a deployment that gives matt geo and judge, and sam only geo. */
+/** A server on a fresh runtime, with a deployment that gives owner geo and judge, and stranger only geo. */
 async function serve(
   options: Partial<Omit<ServerOptions, "runtime">> = {},
 ): Promise<Server> {
@@ -127,7 +127,7 @@ async function serve(
       return id ? { id } : undefined;
     },
     agentsFor: (caller: Caller) =>
-      caller.id === "matt" ? [geo, judge, seller] : [geo],
+      caller.id === "owner" ? [geo, judge, seller] : [geo],
     onError: () => {},
     ...options,
   });
@@ -138,7 +138,7 @@ function wait_(
   server: Server,
   conversation: string,
   body: object,
-  caller = "matt",
+  caller = "owner",
 ) {
   return server.fetch(
     new Request(
@@ -173,7 +173,7 @@ describe("the server's HTTP API", () => {
   it("lists the agents the caller is given, with their descriptions", async () => {
     const server = await serve();
     const list = await server.fetch(
-      new Request("http://que/agents", { headers: as("matt") }),
+      new Request("http://que/agents", { headers: as("owner") }),
     );
     expect(await list.json()).toEqual({
       agents: [
@@ -230,10 +230,15 @@ describe("the server's HTTP API", () => {
       404,
       "agent_not_found",
     ]);
-    const notGiven = await wait_(server, "c", asks("1", "Hi", "judge"), "sam");
+    const notGiven = await wait_(
+      server,
+      "c",
+      asks("1", "Hi", "judge"),
+      "stranger",
+    );
     expect(notGiven.status).toBe(404);
     await (await wait_(server, "c", asks("1"))).json();
-    const other = await wait_(server, "c", asks("2"), "sam");
+    const other = await wait_(server, "c", asks("2"), "stranger");
     expect([other.status, await errorOf(other)]).toEqual([
       404,
       "conversation_not_found",
@@ -323,7 +328,7 @@ describe("the server's HTTP API", () => {
       },
     ]);
     await (await wait_(server, "c", asks("1", "Where?"))).json();
-    expect(seen).toContain("/home/matt");
+    expect(seen).toContain("/home/owner");
     const locked = await wait_(server, "locked", asks("1"));
     expect([locked.status, await errorOf(locked)]).toEqual([403, "forbidden"]);
   });
@@ -353,7 +358,7 @@ describe("the server's HTTP API", () => {
       fauxAssistantMessage([fauxToolCall("who_am_i", {}, { id: "call-1" })], {
         stopReason: "toolUse",
       }),
-      fauxAssistantMessage([fauxText("You are matt-at-crm.")]),
+      fauxAssistantMessage([fauxText("You are owner-at-crm.")]),
     ]);
     const asked = await wait_(server, "c", asks("1", "Who am I?", "seller"));
     expect(asked.status).toBe(200);
@@ -370,7 +375,7 @@ describe("the server's HTTP API", () => {
             name: "crm",
             description: "The CRM, as you.",
             owner: "user",
-            connectUrl: "https://dash/connect/crm?for=matt",
+            connectUrl: "https://dash/connect/crm?for=owner",
           },
         },
       ],
@@ -379,7 +384,7 @@ describe("the server's HTTP API", () => {
     // Busy while it waits: the person answers first.
     const other = await wait_(server, "c", asks("2", "Hi", "seller"));
     expect([other.status, await errorOf(other)]).toEqual([422, "busy"]);
-    logins.set("matt", "matt-at-crm");
+    logins.set("owner", "owner-at-crm");
     const done = await wait_(server, "c", {
       agent: "seller",
       runId: "1",
@@ -387,7 +392,7 @@ describe("the server's HTTP API", () => {
     });
     expect(await done.json()).toMatchObject({
       status: "done",
-      result: "You are matt-at-crm.",
+      result: "You are owner-at-crm.",
     });
     expect(calls()).toBe(2);
     const late = await wait_(server, "c", {
@@ -404,14 +409,14 @@ describe("the server's HTTP API", () => {
   it("answers 404 for a route it does not have", async () => {
     const server = await serve();
     const none = await server.fetch(
-      new Request("http://que/threads", { headers: as("matt") }),
+      new Request("http://que/threads", { headers: as("owner") }),
     );
     expect([none.status, await errorOf(none)]).toEqual([404, "not_found"]);
   });
 });
 
 /** GET a route as a caller, or as nobody with `null`. */
-const get = (server: Server, path: string, caller: string | null = "matt") =>
+const get = (server: Server, path: string, caller: string | null = "owner") =>
   server.fetch(
     new Request(`http://que${path}`, { headers: caller ? as(caller) : {} }),
   );
@@ -422,7 +427,7 @@ describe("the server's history routes", () => {
     server: Server,
     conversation: string,
     agent = "geo",
-    caller = "matt",
+    caller = "owner",
   ) {
     faux.setResponses([fauxAssistantMessage([fauxText("Paris.")])]);
     await (
@@ -435,14 +440,14 @@ describe("the server's history routes", () => {
     const all = [geo, judge, secret, seller];
     const server = await serve({
       agentsFor: (caller) =>
-        caller.id === "matt"
+        caller.id === "owner"
           ? all.filter((agent) => given.includes(agent.name))
           : [geo],
     });
     await answered(server, "a");
     await answered(server, "b", "seller");
     await answered(server, "c");
-    await answered(server, "s", "geo", "sam");
+    await answered(server, "s", "geo", "stranger");
     const first = await get(server, "/conversations?limit=2");
     const page = (await first.json()) as {
       items: { conversation: string }[];
@@ -532,10 +537,10 @@ describe("the server's history routes", () => {
       interrupts: [],
     });
     for (const [path, caller] of [
-      ["/conversations/cl-42%2Fgeo", "sam"],
-      ["/conversations/none", "matt"],
-      ["/conversations/cl-42%2Fgeo/entries", "sam"],
-      ["/conversations/none/entries", "matt"],
+      ["/conversations/cl-42%2Fgeo", "stranger"],
+      ["/conversations/none", "owner"],
+      ["/conversations/cl-42%2Fgeo/entries", "stranger"],
+      ["/conversations/none/entries", "owner"],
     ] as const) {
       const hidden = await get(server, path, caller);
       expect([path, hidden.status, await errorOf(hidden)]).toEqual([
@@ -556,7 +561,7 @@ describe("the server's history routes", () => {
       fauxAssistantMessage([fauxToolCall("who_am_i", {}, { id: "call-1" })], {
         stopReason: "toolUse",
       }),
-      fauxAssistantMessage([fauxText("You are matt-at-crm.")]),
+      fauxAssistantMessage([fauxText("You are owner-at-crm.")]),
     ]);
     const asked = (await (
       await wait_(server, "c", asks("1", "Who am I?", "seller"))
@@ -632,12 +637,12 @@ describe("the server's operations, for a way in in the same process", () => {
 
   it("list the caller's agents, and run to the outcome as the routes do", async () => {
     const server = await serve();
-    expect(await server.agents(request("sam"))).toEqual([
+    expect(await server.agents(request("stranger"))).toEqual([
       { name: "geo", description: "Answers questions about places." },
     ]);
     faux.setResponses([fauxAssistantMessage([fauxText("Paris.")])]);
     await expect(
-      server.run(request("matt"), "geo", {
+      server.run(request("owner"), "geo", {
         conversation: "c",
         runId: "1",
         input: "Capital of France?",
@@ -652,10 +657,10 @@ describe("the server's operations, for a way in in the same process", () => {
       fauxAssistantMessage([fauxToolCall("who_am_i", {}, { id: "call-1" })], {
         stopReason: "toolUse",
       }),
-      fauxAssistantMessage([fauxText("You are matt-at-crm.")]),
+      fauxAssistantMessage([fauxText("You are owner-at-crm.")]),
     ]);
     await expect(
-      server.run(request("matt"), "seller", {
+      server.run(request("owner"), "seller", {
         conversation: "c",
         runId: "1",
         input: "Who am I?",
@@ -675,14 +680,14 @@ describe("the server's operations, for a way in in the same process", () => {
         },
       ],
     });
-    logins.set("matt", "matt-at-crm");
+    logins.set("owner", "owner-at-crm");
     await expect(
-      server.run(request("matt"), "seller", {
+      server.run(request("owner"), "seller", {
         conversation: "c",
         runId: "1",
         resume: { "call-1:connection-crm:0": { type: "approve" } },
       }),
-    ).resolves.toEqual({ status: "done", result: "You are matt-at-crm." });
+    ).resolves.toEqual({ status: "done", result: "You are owner-at-crm." });
   });
 
   it("throw the same refusals, as ServerError with the route's status and code", async () => {
@@ -698,7 +703,7 @@ describe("the server's operations, for a way in in the same process", () => {
     const none = await refused(undefined, "geo");
     expect(none).toBeInstanceOf(ServerError);
     expect(none).toMatchObject({ status: 401, code: "unauthenticated" });
-    expect(await refused("sam", "judge")).toMatchObject({
+    expect(await refused("stranger", "judge")).toMatchObject({
       status: 404,
       code: "agent_not_found",
     });
@@ -707,7 +712,7 @@ describe("the server's operations, for a way in in the same process", () => {
   it("read the caller's conversations and entries as the routes do, with pi's cursors, and the same refusals", async () => {
     const server = await serve();
     faux.setResponses([fauxAssistantMessage([fauxText("Paris.")])]);
-    await server.run(request("matt"), "geo", {
+    await server.run(request("owner"), "geo", {
       conversation: "c",
       runId: "1",
       input: "Capital of France?",
@@ -718,15 +723,15 @@ describe("the server's operations, for a way in in the same process", () => {
       status: "idle",
       interrupts: [],
     };
-    await expect(server.conversations(request("matt"))).resolves.toEqual({
+    await expect(server.conversations(request("owner"))).resolves.toEqual({
       items: [info],
     });
-    await expect(server.conversation(request("matt"), "c")).resolves.toEqual(
+    await expect(server.conversation(request("owner"), "c")).resolves.toEqual(
       info,
     );
-    const newest = await server.entries(request("matt"), "c", { limit: 1 });
+    const newest = await server.entries(request("owner"), "c", { limit: 1 });
     expect(newest.items.map((entry) => entry.kind)).toEqual(["pi.assistant"]);
-    const before = await server.entries(request("matt"), "c", {
+    const before = await server.entries(request("owner"), "c", {
       limit: 1,
       cursor: newest.next!,
     });
@@ -734,10 +739,10 @@ describe("the server's operations, for a way in in the same process", () => {
       items: [expect.objectContaining({ kind: "pi.user" })],
     });
     await expect(
-      server.conversation(request("sam"), "c"),
+      server.conversation(request("stranger"), "c"),
     ).rejects.toMatchObject({ status: 404, code: "conversation_not_found" });
     await expect(
-      server.conversations(request("matt"), { limit: 101 }),
+      server.conversations(request("owner"), { limit: 101 }),
     ).rejects.toMatchObject({ status: 400, code: "bad_request" });
   });
 
@@ -753,7 +758,7 @@ describe("the server's operations, for a way in in the same process", () => {
     const stop = new AbortController();
     let alive = 0;
     const outcome = server.run(
-      request("matt"),
+      request("owner"),
       "geo",
       { conversation: "c", runId: "1", input: "Wait." },
       { signal: stop.signal, onKeepAlive: () => (alive += 1) },

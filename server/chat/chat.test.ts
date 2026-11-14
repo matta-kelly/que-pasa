@@ -94,7 +94,7 @@ async function serve(): Promise<Server> {
 }
 
 /** The AI SDK's own transport, as `useChat` uses it, on the server's handler. */
-const transportOf = (server: Server, caller = "matt") =>
+const transportOf = (server: Server, caller = "owner") =>
   new DefaultChatTransport<ChatMessage>({
     api: "http://que/chat",
     headers: { "x-caller": caller },
@@ -141,7 +141,7 @@ async function send_(
 }
 
 /** The chat's history, as the app loads it. */
-async function history(server: Server, caller = "matt") {
+async function history(server: Server, caller = "owner") {
   const response = await server.fetch(
     new Request("http://que/chat/c/messages", {
       headers: { "x-caller": caller },
@@ -307,7 +307,7 @@ describe("the chat surface, with the AI SDK's own client", () => {
     const stop = await server.fetch(
       new Request("http://que/chat/c/stop", {
         method: "POST",
-        headers: { "x-caller": "matt", "content-type": "application/json" },
+        headers: { "x-caller": "owner", "content-type": "application/json" },
         body: JSON.stringify({ runId: "m1" }),
       }),
     );
@@ -322,7 +322,7 @@ describe("the chat surface, with the AI SDK's own client", () => {
 
   it("refuses what a chat cannot do, before any stream starts", async () => {
     const server = await serve();
-    const post = (body: object, caller = "matt") =>
+    const post = (body: object, caller = "owner") =>
       server.fetch(
         new Request("http://que/chat", {
           method: "POST",
@@ -370,16 +370,18 @@ describe("the chat surface, with the AI SDK's own client", () => {
         }),
       ),
     ).toEqual([400, "bad_request"]);
-    // Made by matt: sam finds no conversation of the key, and matt finds it waits on nothing.
+    // Made by owner: stranger finds no conversation of the key, and owner finds it waits on nothing.
     faux.setResponses([fauxAssistantMessage([fauxText("Hi.")])]);
     await send_(server, [message]);
     for (const path of ["/chat/c/stream", "/chat/c/messages"]) {
       const hidden = await server.fetch(
-        new Request(`http://que${path}`, { headers: { "x-caller": "sam" } }),
+        new Request(`http://que${path}`, {
+          headers: { "x-caller": "stranger" },
+        }),
       );
       expect(await refused(hidden)).toEqual([404, "conversation_not_found"]);
     }
-    expect(await refused(await post(base, "sam"))).toEqual([
+    expect(await refused(await post(base, "stranger"))).toEqual([
       404,
       "conversation_not_found",
     ]);
@@ -413,7 +415,7 @@ describe("the chat surface, with the AI SDK's own client", () => {
     const stop = await server.fetch(
       new Request("http://que/chat/c/stop", {
         method: "POST",
-        headers: { "x-caller": "matt", "content-type": "application/json" },
+        headers: { "x-caller": "owner", "content-type": "application/json" },
         body: JSON.stringify({ runId: "nope" }),
       }),
     );
@@ -435,7 +437,7 @@ describe("the chat surface, with the AI SDK's own client", () => {
     const busy = await server.fetch(
       new Request("http://que/chat", {
         method: "POST",
-        headers: { "x-caller": "matt", "content-type": "application/json" },
+        headers: { "x-caller": "owner", "content-type": "application/json" },
         body: JSON.stringify({
           id: "c",
           trigger: "submit-message",
@@ -473,7 +475,7 @@ describe("the LangGraph routes for a conversation's runs", () => {
     const going = holding();
     void send_(server, [said("m1", "Hold.")]).catch(() => {});
     await going;
-    const get = (path: string, caller = "matt") =>
+    const get = (path: string, caller = "owner") =>
       server.fetch(
         new Request(`http://que${path}`, { headers: { "x-caller": caller } }),
       );
@@ -486,12 +488,12 @@ describe("the LangGraph routes for a conversation's runs", () => {
       entries: { first: expect.any(Number) },
     });
     expect((await get("/conversations/c/runs/m9")).status).toBe(404);
-    expect((await get("/conversations/c/runs", "sam")).status).toBe(404);
+    expect((await get("/conversations/c/runs", "stranger")).status).toBe(404);
     const cancel = (runId: string) =>
       server.fetch(
         new Request(`http://que/conversations/c/runs/${runId}/cancel`, {
           method: "POST",
-          headers: { "x-caller": "matt" },
+          headers: { "x-caller": "owner" },
         }),
       );
     expect(await (await cancel("m1")).json()).toEqual({ stopped: true });

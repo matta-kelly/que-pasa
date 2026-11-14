@@ -33,7 +33,7 @@ import {
 import { reminder } from "./extension.ts";
 import { resultOf, scripted } from "./scripted.fixture.ts";
 
-const caller = { id: "matt" };
+const caller = { id: "owner" };
 
 /** One run on a fresh runtime in memory, closed after: what most tests need. */
 async function once<
@@ -113,7 +113,7 @@ describe("a run", () => {
     await expect(once(agent, "How many A1?", { caller, models })).resolves.toBe(
       "12 units.",
     );
-    expect(calls).toEqual([{ sku: "A1", caller: "matt" }]);
+    expect(calls).toEqual([{ sku: "A1", caller: "owner" }]);
     expect(faux.state.callCount).toBe(2);
   });
 
@@ -921,7 +921,7 @@ describe("a run's resources", () => {
     } finally {
       await runtime.close();
     }
-    expect(seen).toEqual(['chat-1 matt {"root":"/work"}']);
+    expect(seen).toEqual(['chat-1 owner {"root":"/work"}']);
     const results = messages.filter((m) => m.role === "toolResult");
     expect(results.map((m) => JSON.stringify(m.content))).toEqual([
       expect.stringContaining("/work"),
@@ -1075,8 +1075,8 @@ describe("a run's middleware", () => {
     await once(agent, "Go.", { caller, models });
     expect(prompts).toHaveLength(1);
     const prompt = prompts[0]!;
-    expect(prompt).toContain("notes for matt");
-    expect(prompt.indexOf("notes for matt")).toBeLessThan(
+    expect(prompt).toContain("notes for owner");
+    expect(prompt.indexOf("notes for owner")).toBeLessThan(
       prompt.indexOf("Answer from your notes."),
     );
   });
@@ -1355,11 +1355,11 @@ describe("a conversation", () => {
             context: { root },
           })
           .then(resultOf);
-      await go("run-1", "matt", "/work");
-      await expect(go("run-2", "sam", "/work")).rejects.toThrow(
-        'conversation "chat-1" acts for "matt", not "sam"',
+      await go("run-1", "owner", "/work");
+      await expect(go("run-2", "stranger", "/work")).rejects.toThrow(
+        'conversation "chat-1" acts for "owner", not "stranger"',
       );
-      await expect(go("run-2", "matt", "/other")).rejects.toThrow(
+      await expect(go("run-2", "owner", "/other")).rejects.toThrow(
         'conversation "chat-1" was made with another context',
       );
     } finally {
@@ -1522,7 +1522,7 @@ describe("a run's end", () => {
         .run(geo, "Again?", {
           conversation: "c",
           runId: "2",
-          caller: { id: "sam" },
+          caller: { id: "stranger" },
           onStarted: () => (started += 1),
         })
         .then(resultOf)
@@ -1618,7 +1618,10 @@ describe("a run's connections", () => {
     );
 
   it("gives a tool the connection made from its caller's own login, and never the login", async () => {
-    const logins: Record<string, string> = { matt: "tok-matt", sam: "tok-sam" };
+    const logins: Record<string, string> = {
+      owner: "tok-owner",
+      stranger: "tok-stranger",
+    };
     const { agent, runtime, reads } = await setup(({ caller }) => {
       const token = logins[caller.id];
       return token ? { token } : undefined;
@@ -1626,7 +1629,7 @@ describe("a run's connections", () => {
     const seen: string[] = [];
     let messages: Message[] = [];
     try {
-      for (const who of ["matt", "sam"]) {
+      for (const who of ["owner", "stranger"]) {
         reads();
         await runtime
           .run(agent, "Read.", {
@@ -1642,14 +1645,14 @@ describe("a run's connections", () => {
       await runtime.close();
     }
     expect(seen).toEqual([
-      expect.stringContaining("notes of matt"),
-      expect.stringContaining("notes of sam"),
+      expect.stringContaining("notes of owner"),
+      expect.stringContaining("notes of stranger"),
     ]);
     expect(JSON.stringify(messages)).not.toContain("tok-");
   });
 
   it("gives a shared login to each caller the deployment allows", async () => {
-    const allowed = new Set(["matt", "sam"]);
+    const allowed = new Set(["owner", "stranger"]);
     const { agent, runtime, reads } = await setup(
       ({ caller }) =>
         allowed.has(caller.id) ? { token: "analytics" } : undefined,
@@ -1657,7 +1660,7 @@ describe("a run's connections", () => {
     );
     const seen: string[] = [];
     try {
-      for (const who of ["matt", "sam"]) {
+      for (const who of ["owner", "stranger"]) {
         reads();
         await runtime
           .run(agent, "Read.", {
@@ -1703,7 +1706,7 @@ describe("a run's connections", () => {
         (refused as ConnectionsMissing).connections.map((c) => c.name),
       ).toEqual(["notes"]);
       expect(faux.state.callCount).toBe(0);
-      token = "tok-matt";
+      token = "tok-owner";
       reads();
       await expect(go()).resolves.toBe("Read.");
     } finally {
@@ -1736,7 +1739,11 @@ describe("a run's connections", () => {
       connect: ({ token }) => ({ token }),
       whoami: ({ token }) => {
         asked += 1;
-        return { id: 7, name: `${token} kelly`, email: `${token}@lotus.test` };
+        return {
+          id: 7,
+          name: `${token}'s account`,
+          email: `${token}@lotus.test`,
+        };
       },
     });
     const mine = defineTool({
@@ -1793,10 +1800,10 @@ describe("a run's connections", () => {
     expect(asked).toBe(1);
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain(
-      "You act for matt.\nIn these services you are logged in as:\n" +
-        "- crm: matt kelly (id 7, matt@lotus.test): the login of the person you act for",
+      "You act for owner.\nIn these services you are logged in as:\n" +
+        "- crm: owner's account (id 7, owner@lotus.test): the login of the person you act for",
     );
-    expect(prompts[0]!.indexOf("crm: matt kelly")).toBeLessThan(
+    expect(prompts[0]!.indexOf("crm: owner's account")).toBeLessThan(
       prompts[0]!.indexOf("Sell."),
     );
   });
@@ -1925,7 +1932,7 @@ describe("a run's connections", () => {
       owner: "user",
       credential: z.object({ token: z.string() }),
       connect: ({ token }) => ({ token }),
-      whoami: ({ token }) => ({ id: 7, name: `${token} kelly` }),
+      whoami: ({ token }) => ({ id: 7, name: `${token}'s account` }),
     });
     const mine = defineTool({
       name: "my_leads",
@@ -2001,7 +2008,7 @@ describe("a run's connections", () => {
         status: "interrupted",
         interrupts: [{ id: "l:connection-crm:1" }],
       });
-      login = "matt";
+      login = "owner";
       await expect(
         runtime
           .run(
@@ -2015,7 +2022,7 @@ describe("a run's connections", () => {
       await runtime.close();
     }
     expect(prompts[0]).not.toContain("logged in as");
-    expect(prompts[1]).toContain("- crm: matt kelly (id 7)");
+    expect(prompts[1]).toContain("- crm: owner's account (id 7)");
   });
 
   it("ends the call with an error the model reads when the person rejects connecting, and the tool never runs", async () => {
@@ -2156,7 +2163,7 @@ describe("a run's connections", () => {
   it("fails a run nobody attends whose login is gone by the call, with needs_connection, before the tool acts", async () => {
     let checks = 0;
     const { agent, runtime, reads } = await setup(() =>
-      ++checks === 1 ? { token: "tok-matt" } : undefined,
+      ++checks === 1 ? { token: "tok-owner" } : undefined,
     );
     try {
       reads();
