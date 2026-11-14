@@ -74,7 +74,7 @@ test_the_job_gets_crate_then_logs_in_ensures_and_promotes() {
   then_is "the workflow file" "present" "$(present)" || return 1
   steps=$(block '^    steps:')
   line() { grep -nF -- "$1" <<<"$steps" | head -1 | cut -d: -f1; }
-  get=$(line 'curl -fsSL --max-time 120 https://github.com/matta-kelly/crate/releases/download/v2/crate-linux-amd64.tar.gz')
+  get=$(line 'curl -fsSL --max-time 120 https://github.com/matta-kelly/crate/releases/download/v3/crate-linux-amd64.tar.gz')
   login=$(line 'podman login ghcr.io')
   ensure=$(line 'run: crate dev-image ensure')
   promote=$(line 'run: crate dev-image promote')

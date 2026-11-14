@@ -1,4 +1,4 @@
-# que-pasa's dev image, built once for each set of inputs: crate (its release at v2) hashes the files crate.toml's
+# que-pasa's dev image, built once for each set of inputs: crate (its release at v3) hashes the files crate.toml's
 # [dev] inputs names, builds and smokes ghcr.io/matta-kelly/que-pasa-dev:<hash> only when ghcr lacks it, and points
 # :main at it. A push to main that changes no input does not start it. Not a required check, so the path filter is
 # allowed (ci.md, When it runs).
@@ -44,7 +44,7 @@ jobs:
       - name: Get crate
         run: |
           mkdir -p "$RUNNER_TEMP/crate"
-          curl -fsSL --max-time 120 https://github.com/matta-kelly/crate/releases/download/v2/crate-linux-amd64.tar.gz | tar -xz -C "$RUNNER_TEMP/crate"
+          curl -fsSL --max-time 120 https://github.com/matta-kelly/crate/releases/download/v3/crate-linux-amd64.tar.gz | tar -xz -C "$RUNNER_TEMP/crate"
           echo "$RUNNER_TEMP/crate/bin" >>"$GITHUB_PATH"
       - run: crate dev-image ensure
       - run: crate dev-image promote
