@@ -24,7 +24,7 @@ await runtime.close();
 // first: { status: "done", result } or { status: "interrupted", interrupts }
 ```
 
-A conversation keeps its history across runs: the second run's model has the first's messages. Each run is one input to its own result, usage and trace; a conversation takes one run at a time, and every run on it gives the same agent, caller and context.
+A conversation keeps its history across runs: the second run's model has the first's messages. Each run is one input to its own result, usage and trace; a conversation takes one run at a time, and every run on it gives the same agent, caller and context. An input while a run goes on is refused by default; `whenBusy: "followUp"` queues it to run after, and `whenBusy: "steer"` joins it to the run going on, at its next step (pi's `whenBusy`).
 
 A tool call can stop to ask a person, as LangGraph's `interrupt()`. A run someone attends (`attended: true`) then gives back `interrupted`, with its questions, and goes on at that call once answered, as LangGraph's `Command(resume)`; a run nobody attends, the default, fails with the question before the tool acts:
 

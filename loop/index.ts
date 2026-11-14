@@ -19,6 +19,7 @@ export {
   type RunOutcome,
   type RunResult,
   type RunUsage,
+  type WhenBusy,
   type Runtime,
   type RuntimeOptions,
 } from "./runtime.ts";

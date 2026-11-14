@@ -37,22 +37,23 @@ A process on the network that starts runs for whoever calls: for each request it
 |---|---|---|
 | `GET /ok` | `GET /ok` | `{ ok: true }`, with no login: the deployment's health check |
 | `GET /agents` | `POST /assistants/search` | `{ agents: [{ name, description }] }`: the caller's |
-| `POST /conversations/{conversation}/runs/wait`, body `{ agent, runId, input }` or `{ agent, runId, command: { resume } }` | `POST /threads/{id}/runs/wait`, with `command.resume` | how the run stands |
+| `POST /conversations/{conversation}/runs/wait`, body `{ agent, runId, input, whenBusy? }` or `{ agent, runId, command: { resume } }` | `POST /threads/{id}/runs/wait`, with `multitask_strategy` or `command.resume` | how the run stands |
 
 - `conversation`: the client's key, any non-empty string, URL-encoded in the path. `runId`: the client's, so the same one again is the same run and gives back its outcome. `input`: one text message, as every agent takes
+- `whenBusy`: what the input does when a run goes on, or waits, on the conversation, pi's ([[que-pasa-loop#Conversation and run]]): `reject`, the default, answers 422 `busy`; `followUp` queues it, and answers its own outcome once the runs before it end; `steer` joins it to the run going on, and answers that run's outcome. LangGraph's `multitask_strategy`: `reject` is its default, `enqueue` is `followUp`, and it has no steer
 - `command.resume`: answers to the run's questions, by their ids, on the run's own `runId`, in place of `input`: LangGraph's `Command(resume)`. The run goes on at the calls that asked
 - a refusal comes before the run is admitted, as a status with `{ error: { code, message } }`:
 
 | Status | Code | When |
 |---|---|---|
-| 400 | `bad_request` | the body is not `{ agent, runId, input }` or `{ agent, runId, command: { resume } }` |
+| 400 | `bad_request` | the body is not `{ agent, runId, input, whenBusy? }` or `{ agent, runId, command: { resume } }` |
 | 401 | `unauthenticated` | `authenticate` gave no caller |
 | 403 | `forbidden` | a hook threw `Refused` |
 | 404 | `agent_not_found` | an agent not given to the caller, or none of that name |
 | 404 | `conversation_not_found` | another caller's conversation, shown as not found |
 | 409 | `other_agent`, `other_context` | the conversation was made with another agent, or another context |
 | 409 | `not_interrupted` | answers to a question the run does not wait on, or to a run never started or ended |
-| 422 | `busy` | a run goes on, or waits on a question, on the conversation (LangGraph's status for its "reject" strategy) |
+| 422 | `busy` | a run goes on, or waits on a question, on the conversation, and the input's `whenBusy` is `reject` (LangGraph's status for its "reject" strategy) |
 | 502 | `connection_failed` | a connection could not be made, or could not say who it is logged in as, at the run's start |
 | 500 | `internal` | an error the server did not expect, given to `onError` |
 
@@ -70,7 +71,7 @@ A process on the network that starts runs for whoever calls: for each request it
 
 The same two, for a way in in the same process, such as an MCP layer: each answers the deployment's questions from the request first, as the routes do.
 - `agents(request)`: the caller's agents, as `{ name, description }`
-- `run(request, agent, { conversation, runId, input } | { conversation, runId, resume }, { signal, onKeepAlive })`: the run's outcome, `{ status: "done", result }`, `{ status: "failed", error }` or `{ status: "interrupted", interrupts }`
+- `run(request, agent, { conversation, runId, input, whenBusy } | { conversation, runId, resume }, { signal, onKeepAlive })`: the run's outcome, `{ status: "done", result }`, `{ status: "failed", error }` or `{ status: "interrupted", interrupts }`
 	- a refusal throws `ServerError`, with the route's status and code
 	- `signal`: stops the run when it aborts, which then ends `failed` with `aborted`. Left out, the run goes on whatever the client does
 	- `onKeepAlive`: called each second while the run goes on, for a client that must show it is alive, such as an MCP progress notification
@@ -80,5 +81,6 @@ The same two, for a way in in the same process, such as an MCP layer: each answe
 - from LangGraph: a conversation's key and a run's id are the client's, not made by the server, so a retry is the same run with no lookup
 - from LangGraph: `contextFor` is the deployment's, and a request has no `context` field; LangGraph takes a client's context and lets an auth handler refuse it
 - from LangGraph: another caller's conversation is refused by the run itself (it acts for one caller), not filtered by an auth handler; the answer is the same, not found
-- from LangGraph: a resume is the same run, by its `runId`, not a new run on the thread; new input while a run waits is refused, busy, where LangGraph drops the waiting question
+- from LangGraph: a resume is the same run, by its `runId`, not a new run on the thread; new input while a run waits goes by its `whenBusy`, where LangGraph's new input drops the waiting question
+- from LangGraph: `steer` is pi's, with no LangGraph strategy; LangGraph's `interrupt` and `rollback`, which stop the run going on for the new input, are not built
 - not built: streaming a run, a run in the background with join, cancel, reading a conversation, and crons: run life, each one more route

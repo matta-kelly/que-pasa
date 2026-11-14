@@ -7,6 +7,7 @@ import {
 import type { Message, Models } from "@earendil-works/pi-ai";
 import { isDeepStrictEqual } from "node:util";
 import {
+  AgentDoc,
   type Conversation,
   ConversationBusy,
   type ConversationId,
@@ -17,6 +18,7 @@ import {
   LiveDoc,
   type LiveState,
   type SettledSubmissionRecord,
+  type DocumentReader,
   type Storage,
   type Submission,
   type SubmissionId,
@@ -51,11 +53,13 @@ import {
 import {
   type Asked,
   ConversationDoc,
+  InterruptsDoc,
   ConversationIndex,
   type ConversationState,
   MiddlewareDoc,
   RunDoc,
   type RunState,
+  runGoingOn,
 } from "./state.ts";
 import { activeParent, createTracing } from "./trace.ts";
 import { answerText, messagesOf, outcomeOf } from "./transcript.ts";
@@ -74,6 +78,13 @@ export type RunResult<O> = O extends z.ZodObject ? z.infer<O> : string;
 export type RunOutcome<R> =
   | { status: "done"; result: R }
   | { status: "interrupted"; interrupts: Interrupt[] };
+
+/**
+ * What an input does when a run goes on on its conversation, pi's `whenBusy` and LangGraph's `multitask_strategy`:
+ * `reject` refuses it, `followUp` queues it to start when the runs before it end (LangGraph's `enqueue`), and `steer`
+ * joins it to the run going on, at that run's next step.
+ */
+export type WhenBusy = "reject" | "followUp" | "steer";
 
 /**
  * Answers to an interrupted run's questions, by their ids, as LangGraph's `Command(resume)`: given in place of the input,
@@ -127,8 +138,6 @@ export type RunOptions<C extends Json | undefined> = {
    * the question when a call asks one. Its first start decides; the same run id again keeps it.
    */
   attended?: boolean;
-  /** The model to run on, "provider:model-id", in place of the agent's: such as a fallback for a retry. */
-  model?: string;
   /** Stops the run: run() rejects with the signal's reason, and no tool or model call starts after it. */
   signal?: AbortSignal;
   /**
@@ -144,7 +153,23 @@ export type RunOptions<C extends Json | undefined> = {
    * The system prompt is not in it.
    */
   onMessages?: (messages: Message[]) => void;
-} & (undefined extends C ? { context?: C } : { context: C });
+} & (undefined extends C ? { context?: C } : { context: C }) &
+  (
+    | {
+        /**
+         * What the run does when another goes on on its conversation, pi's `whenBusy`: `reject`, the default, refuses
+         * it (`busy`); `followUp` queues it, to start when the runs before it end; `steer` joins it to the run going on,
+         * at that run's next step, and gives back that run's outcome. On an idle conversation every run starts at once.
+         */
+        whenBusy?: "reject";
+        /**
+         * The model to run on, "provider:model-id", in place of the agent's: such as a fallback for a retry. Only for a
+         * run that starts at once: one that waits or joins runs on the conversation's model when it starts.
+         */
+        model?: string;
+      }
+    | { whenBusy: Exclude<WhenBusy, "reject">; model?: never }
+  );
 
 /** A host's agents on one pi harness: open once per process, run any number of runs, close at the end. */
 export type Runtime = {
@@ -201,13 +226,26 @@ export async function openRuntime({
   for (const agent of agents) {
     installed.set(agent.name, {
       agent,
-      extension: agentExtension(agent, resources, tracing.toolEvent),
+      extension: agentExtension(agent, resources, tracing.toolEvent, started),
     });
   }
   const registry = createRegistry();
   for (const { extension } of installed.values()) registry.install(extension);
   registry.install(tracing.extension);
-  const harness = await Harness.open(storage, { models, registry }, context);
+  const harness = await Harness.open(
+    storage,
+    {
+      models,
+      registry,
+      settings: {
+        // One run per input: each follow-up its own run, with its own result, usage and trace.
+        followUpMode: "one-at-a-time",
+        // A failed run does not strand the follow-ups queued behind it.
+        afterFailedRun: "continue",
+      },
+    },
+    context,
+  );
   tracing.bind(harness);
   harness.resume();
 
@@ -304,45 +342,59 @@ export async function openRuntime({
   }
 
   /**
-   * The run's submission: the one its run id already has, or its input admitted now, with its model, its document and
-   * its place in the conversation's runs, in one commit. A conversation whose run goes on refuses it.
+   * The run's submission: the one its run id already has, or its input admitted now, with its document and its place in
+   * the conversation's runs, in one commit. A run that starts at once sets the conversation's model; one that waits or
+   * joins runs on the conversation's model, and its document says so. A busy conversation refuses a run that rejects.
    */
   async function admit(
     conversation: Conversation,
     key: string,
     runId: string,
     input: string,
-    start: Omit<RunState, "spent" | "interrupts">,
+    whenBusy: WhenBusy,
+    start: Omit<RunState, "spent">,
   ) {
     const { id } = conversation;
     const admitted = await harness.commit(async (tx) => {
       const had = await tx.submissionByRequest(id, runId);
       if (had) return had.id;
+      const busy = (await tx.doc(LiveDoc, id)).run !== undefined;
       let submission: SubmissionId;
       try {
-        // Before any other write, as pi requires; a busy conversation throws here, having written nothing.
+        // Before any table write, as pi requires; a busy conversation that refuses throws here, having written nothing.
         submission = await conversation.submit(tx, {
           type: "input",
           content: input,
           requestId: runId,
-          whenBusy: "reject",
+          whenBusy,
         });
       } catch (error) {
         if (!(error instanceof ConversationBusy)) throw error;
-        const going = (await tx.doc(ConversationDoc, id)).runs.at(-1);
+        const kept = await tx.doc(ConversationDoc, id);
+        const live = await tx.doc(LiveDoc, id);
+        const going =
+          kept.inputs?.[live.run?.inputs[0] ?? ""] ?? kept.runs.at(-1);
         throw new RunRefused(
           "busy",
           `conversation "${key}": run "${going}" goes on, so run "${runId}" is refused`,
           { cause: error },
         );
       }
-      await configure(tx, id, { model: parseModel(start.model) });
-      // What the conversation has spent so far, as plain JSON: the run's usage is what it spends after.
-      const spent = JSON.parse(
-        JSON.stringify(await tx.doc(UsageDoc, id)),
-      ) as UsageState;
-      Object.assign(await tx.doc(RunDoc, id, runId, null), start, { spent });
-      (await tx.doc(ConversationDoc, id)).runs.push(runId);
+      let model = start.model;
+      if (busy) {
+        const { model: on } = await tx.doc(AgentDoc, id);
+        if (on) model = `${on.provider}:${on.modelId}`;
+      } else {
+        await configure(tx, id, { model: parseModel(model) });
+      }
+      Object.assign(await tx.doc(RunDoc, id, runId, null), start, { model });
+      // So the questions its calls ask can be watched from its start. A run that starts at once starts with none: the
+      // questions of the runs before it ended with them.
+      const questions = await tx.doc(InterruptsDoc, id);
+      if (!busy) questions.asked = {};
+      const kept = await tx.doc(ConversationDoc, id);
+      kept.runs.push(runId);
+      kept.inputs = { ...kept.inputs, [submission]: runId };
       tracing.start(id, runId);
       return submission;
     }, context);
@@ -353,8 +405,26 @@ export async function openRuntime({
   }
 
   /**
-   * Keep answers to a run's questions, in one commit: each must name a question it waits on, and the run must not have
-   * ended. The calls that asked go on.
+   * Keep what the conversation had spent when its run going on started, once, before that run's first model request: a
+   * run's usage is what it spends after. A queued run is admitted while another goes on, so its admission is not its
+   * start.
+   */
+  async function started(id: ConversationId, reader: DocumentReader) {
+    const runId = await runGoingOn(reader, id, context);
+    if (runId === undefined) return;
+    if ((await reader.snapshot(RunDoc, id, runId, context))?.spent) return;
+    await harness.commit(async (tx) => {
+      const run = await tx.doc(RunDoc, id, runId, null);
+      // As plain JSON: pi's usage is a document of its own.
+      run.spent ??= JSON.parse(
+        JSON.stringify(await tx.doc(UsageDoc, id)),
+      ) as UsageState;
+    }, context);
+  }
+
+  /**
+   * Keep answers to the questions a run waits on, in one commit: the run must be in the run going on, alone or joined by
+   * a steer, and each answer must name a question that waits. The calls that asked go on.
    */
   async function answer(
     conversation: Conversation,
@@ -364,41 +434,43 @@ export async function openRuntime({
     const { id } = conversation;
     await harness.commit(async (tx) => {
       const record = await tx.submissionByRequest(id, runId);
-      const settled =
-        record?.status === "done" || record?.status === "unanswered";
-      const run = await tx.doc(RunDoc, id, runId, null);
-      for (const [asked, given] of Object.entries(answers)) {
-        const question = run.interrupts?.[asked];
-        if (settled || !question || Object.hasOwn(question, "answer")) {
+      const inRun =
+        record !== undefined &&
+        ((await tx.doc(LiveDoc, id)).run?.inputs ?? []).includes(record.id);
+      const { asked } = await tx.doc(InterruptsDoc, id);
+      for (const [question, given] of Object.entries(answers)) {
+        const waiting = asked[question];
+        if (!inRun || !waiting || Object.hasOwn(waiting, "answer")) {
           throw new RunRefused(
             "not_interrupted",
-            `run "${runId}" does not wait on "${asked}"`,
+            `run "${runId}" does not wait on "${question}"`,
           );
         }
-        question.answer = given;
-        delete question.error;
+        waiting.answer = given;
+        delete waiting.error;
       }
     }, context);
   }
 
   /**
-   * The run's questions, once it can go no further without answers: it has one waiting, and every call of its tool round
-   * that runs is waiting on one. Watched while the run goes on.
+   * The questions the run waits on, once it can go no further without answers: its input is in the run going on, that
+   * run has a question waiting, and every call of its tool round that runs is waiting on one. Watched while it goes on.
    */
   async function pausedOf(
     id: ConversationId,
-    runId: string,
+    submission: SubmissionId,
     following: Context,
   ): Promise<Interrupt[]> {
-    const run = await harness.watchDoc(RunDoc, id, runId, following);
+    const asked = await harness.watchDoc(InterruptsDoc, id, following);
     const live = await harness.watchDoc(LiveDoc, id, following);
-    if (!run || !live) throw new Error(`run "${runId}": it is missing`);
+    if (!asked || !live) throw new Error(`conversation ${id}: it is missing`);
     // Either change can pause it: a question asked, or a call that did not ask finishing. The watch that does not find
     // it ends with the follow.
-    const either = [
-      until(run, () => paused(run.value, live.value)),
-      until(live, () => paused(run.value, live.value)),
-    ];
+    const check = () =>
+      live.value.run?.inputs.includes(submission)
+        ? paused(asked.value.asked, live.value)
+        : undefined;
+    const either = [until(asked, check), until(live, check)];
     for (const one of either) one.catch(() => {});
     return Promise.race(either);
   }
@@ -462,6 +534,7 @@ export async function openRuntime({
       key,
       runId,
       typeof input === "string" ? input : "",
+      options.whenBusy ?? "reject",
       {
         model,
         ...(parent === undefined ? {} : { trace: parent }),
@@ -472,32 +545,19 @@ export async function openRuntime({
     if (typeof input !== "string")
       await answer(conversation, runId, input.resume);
     onStarted?.();
-    const kept = await harness.snapshot(
-      RunDoc,
-      conversation.id,
-      runId,
-      context,
-    );
     // A run that waits on a question has not ended: what is given at its end waits for it.
     let waits = false;
     try {
-      const followed = await follow(
-        submission,
-        conversation,
-        runId,
-        kept?.attended === true,
-        signal,
-      );
+      const followed = await follow(submission, conversation, signal);
       if (followed.interrupts) {
         waits = true;
         return { status: "interrupted", interrupts: followed.interrupts };
       }
       const { settled } = followed;
       if (settled.status !== "done") {
+        // A run nobody attends stopped on its questions. A steer that joined it fails with pi's reason.
         const asked = await waitingOf(conversation.id, runId);
-        if (asked.length > 0 && kept?.attended !== true) {
-          throw unattended(agent.name, runId, asked);
-        }
+        if (asked.length > 0) throw unattended(agent.name, runId, asked);
         throw new RunFailed(
           settled.reason,
           `agent "${agent.name}": the run ended with no answer (${settled.reason})`,
@@ -546,14 +606,12 @@ export async function openRuntime({
   }
 
   /**
-   * Follow a run until it settles or, when someone attends it, waits on questions. On abort, pi cancels only the wait and
+   * Follow a run until it settles, or waits on questions someone can answer. On abort, pi cancels only the wait and
    * never the work, so the conversation is aborted too: its tasks stop, and the run rejects with the signal's reason.
    */
   async function follow(
     submission: Submission,
     conversation: Conversation,
-    runId: string,
-    attended: boolean,
     signal: AbortSignal | undefined,
   ): Promise<
     | { settled: SettledSubmissionRecord; interrupts?: never }
@@ -566,8 +624,7 @@ export async function openRuntime({
       const settled = submission.wait(following).then((record) => ({
         settled: record,
       }));
-      if (!attended) return await settled;
-      const paused = pausedOf(conversation.id, runId, following).then(
+      const paused = pausedOf(conversation.id, submission.id, following).then(
         (interrupts) => ({ interrupts }),
       );
       // The one that loses is cancelled below; its rejection is not the run's.
@@ -583,10 +640,12 @@ export async function openRuntime({
     }
   }
 
-  /** The questions a run still waits on. */
+  /** The questions a run nobody attends stopped on. */
   async function waitingOf(id: ConversationId, runId: string) {
+    const kept = await harness.snapshot(InterruptsDoc, id, context);
     return pending(
-      (await harness.snapshot(RunDoc, id, runId, context))?.interrupts,
+      kept?.asked ?? {},
+      (question) => question.runId === runId && !question.attended,
     );
   }
 
@@ -623,34 +682,41 @@ function refuseOther(kept: ConversationState, given: Made) {
   }
 }
 
-/** The questions not answered yet, as a run gives them back. */
-function pending(interrupts: Record<string, Asked> | undefined): Interrupt[] {
-  return Object.entries(interrupts ?? {}).flatMap(([id, asked]) =>
-    Object.hasOwn(asked, "answer")
+/** The questions of `asked` not answered yet that `of` keeps, as a run gives them back. */
+function pending(
+  asked: Readonly<Record<string, Asked>>,
+  of: (asked: Asked) => boolean,
+): Interrupt[] {
+  return Object.entries(asked).flatMap(([id, question]) =>
+    Object.hasOwn(question, "answer") || !of(question)
       ? []
       : [
           {
             id,
-            value: asked.value,
-            ...(asked.error === undefined ? {} : { error: asked.error }),
+            value: question.value,
+            ...(question.error === undefined ? {} : { error: question.error }),
           },
         ],
   );
 }
 
-/** A run's questions, when it waits on them and can go no further: every running call of its tool round asked one. */
+/**
+ * The questions the run going on waits on, when it can go no further: someone can answer them, its calls of this tool
+ * round asked them, and every one of its calls that runs asked one.
+ */
 function paused(
-  run: Readonly<RunState>,
+  asked: Readonly<Record<string, Asked>>,
   live: Readonly<LiveState>,
 ): Interrupt[] | undefined {
-  const waiting = pending(run.interrupts);
-  if (waiting.length === 0) return undefined;
-  const asking = new Set(
-    Object.entries(run.interrupts ?? {}).flatMap(([id, asked]) =>
-      waiting.some((question) => question.id === id) ? [asked.callId] : [],
-    ),
+  const round = live.tools ?? [];
+  const calls = new Set(round.map((slot) => slot.callId));
+  const waiting = pending(
+    asked,
+    (question) => question.attended === true && calls.has(question.callId),
   );
-  const running = (live.tools ?? []).filter(
+  if (waiting.length === 0) return undefined;
+  const asking = new Set(waiting.map(({ id }) => asked[id]!.callId));
+  const running = round.filter(
     (slot) => slot.status !== "done" && slot.taskId !== undefined,
   );
   return running.every((slot) => asking.has(slot.callId)) ? waiting : undefined;

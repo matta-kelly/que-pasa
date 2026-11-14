@@ -23,7 +23,7 @@ import {
 import { jsonSchema, toPiTool } from "./call.ts";
 import type { Resources } from "./resources.ts";
 import type { ToolEvent } from "./trace.ts";
-import { ConversationDoc, MiddlewareDoc, RunDoc } from "./state.ts";
+import { ConversationDoc, MiddlewareDoc, RunDoc, runGoingOn } from "./state.ts";
 import { hasResult, messagesOf, userText } from "./transcript.ts";
 
 /** Any agent, as the runtime holds it. */
@@ -51,6 +51,7 @@ export function agentExtension(
   agent: AnyAgent,
   resources: Resources,
   event: ToolEvent,
+  started: Started,
 ): Extension {
   const { output } = agent;
   const given = toolsOf(agent);
@@ -74,7 +75,7 @@ export function agentExtension(
         ? [identitySection(agent)]
         : []),
     ],
-    hooks: output ? [remind] : [],
+    hooks: [start(started), ...(output ? [remind] : [])],
   });
 }
 
@@ -150,7 +151,7 @@ export async function identitiesOf(
   context: Context,
 ): Promise<Known | undefined> {
   const kept = await reader.snapshot(ConversationDoc, id, context);
-  const runId = kept?.runs.at(-1);
+  const runId = (await runGoingOn(reader, id, context)) ?? kept?.runs.at(-1);
   if (!kept || runId === undefined) return undefined;
   const run = await reader.snapshot(RunDoc, id, runId, context);
   return { caller: kept.caller, identities: run?.identities };
@@ -171,6 +172,21 @@ function identitySection(agent: AnyAgent): PromptSection {
       ),
   };
 }
+
+/** Keeps what a conversation had spent when its run going on started. */
+export type Started = (
+  id: ConversationId,
+  reader: DocumentReader,
+) => Promise<void>;
+
+/** Marks a run's start, before its first model request, so its usage counts from there. */
+const start = (started: Started) =>
+  hook(GenerationTask, {
+    beforeRequest: async (_request, api) => {
+      await started(api.conversationId, api);
+      return undefined;
+    },
+  });
 
 /** The key of a middleware's section of the system prompt. */
 export const sectionKey = (middleware: Middleware) =>

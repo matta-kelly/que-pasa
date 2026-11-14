@@ -21,6 +21,7 @@ import {
   RunFailed,
   RunRefused,
   type Runtime,
+  type WhenBusy,
 } from "../loop/index.ts";
 
 /** Any agent, as a deployment gives it. */
@@ -94,8 +95,16 @@ export type AgentInfo = { name: string; description?: string };
  * ids, as LangGraph's `Command(resume)`.
  */
 export type RunRequest = { conversation: string; runId: string } & (
-  | { input: string; resume?: never }
-  | { resume: Record<string, Json>; input?: never }
+  | {
+      input: string;
+      /**
+       * What the input does when a run goes on on the conversation, pi's `whenBusy`: `reject` (the default, 422 `busy`),
+       * `followUp` (queued, to run after it) or `steer` (joined to it, at its next step). LangGraph's `multitask_strategy`.
+       */
+      whenBusy?: WhenBusy;
+      resume?: never;
+    }
+  | { resume: Record<string, Json>; input?: never; whenBusy?: never }
 );
 
 /**
@@ -142,6 +151,7 @@ const RunBody = z
     agent: z.string().min(1),
     runId: z.string().min(1),
     input: z.string().min(1).optional(),
+    whenBusy: z.enum(["reject", "followUp", "steer"]).optional(),
     command: z
       .strictObject({ resume: z.record(z.string(), z.json()) })
       .optional(),
@@ -151,7 +161,10 @@ const RunBody = z
     {
       message: "give input or command, not both",
     },
-  );
+  )
+  .refine((body) => body.input !== undefined || body.whenBusy === undefined, {
+    message: "whenBusy goes with an input",
+  });
 
 /** A server on a deployment's runtime, with the deployment's answers. */
 export function createServer({
@@ -227,6 +240,7 @@ export function createServer({
       runId,
       caller,
       attended: true,
+      ...(asked.whenBusy === undefined ? {} : { whenBusy: asked.whenBusy }),
       ...(context === undefined ? {} : { context }),
       ...(signal ? { signal } : {}),
       onStarted: admitted,
@@ -299,13 +313,18 @@ export function createServer({
     const body = RunBody.safeParse(await c.req.json().catch(() => undefined));
     if (!body.success)
       throw new ServerError(400, "bad_request", z.prettifyError(body.error));
-    const { agent, runId, input, command } = body.data;
+    const { agent, runId, input, whenBusy, command } = body.data;
     const conversation = c.req.param("conversation");
     const { outcome } = await start(
       c.req.raw,
       agent,
       input !== undefined
-        ? { conversation, runId, input }
+        ? {
+            conversation,
+            runId,
+            input,
+            ...(whenBusy === undefined ? {} : { whenBusy }),
+          }
         : { conversation, runId, resume: command!.resume },
     );
     c.header("Content-Type", "application/json; charset=utf-8");

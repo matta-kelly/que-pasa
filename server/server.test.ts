@@ -266,6 +266,43 @@ describe("the server's HTTP API", () => {
     expect(JSON.parse(text)).toMatchObject({ status: "done", result: "Done." });
   });
 
+  it("queues an input sent with whenBusy followUp, and answers it with its own outcome after the run before it", async () => {
+    const server = await serve();
+    const going = new Promise<void>((resolve) => (started = resolve));
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("wait", {})], {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage([fauxText("Done.")]),
+      fauxAssistantMessage([fauxText("Paris.")]),
+    ]);
+    const first = await wait_(server, "c", asks("1", "Wait."));
+    await going;
+    const queued = wait_(server, "c", {
+      ...asks("2"),
+      whenBusy: "followUp",
+    });
+    const bad = await wait_(server, "c", {
+      agent: "geo",
+      runId: "3",
+      whenBusy: "steer",
+      command: { resume: {} },
+    });
+    expect([bad.status, await errorOf(bad)]).toEqual([400, "bad_request"]);
+    release();
+    expect(JSON.parse(await first.text())).toMatchObject({
+      status: "done",
+      result: "Done.",
+    });
+    const second = await queued;
+    expect(second.status).toBe(200);
+    expect(JSON.parse(await second.text())).toMatchObject({
+      runId: "2",
+      status: "done",
+      result: "Paris.",
+    });
+  });
+
   it("makes a conversation with the context the deployment gives, and refuses with 403 when its hook throws Refused", async () => {
     const server = await serve({
       contextFor: ({ caller, conversation }) => {

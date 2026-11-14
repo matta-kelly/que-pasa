@@ -56,7 +56,9 @@ type Scenario =
   /** Killed after the answer, before the tool ran; the next process goes on with the kept answer. */
   | "answered"
   /** A run nobody attends, killed before its call asks; the next process asks, and the run fails. */
-  | "unattended";
+  | "unattended"
+  /** A follow-up queued while the run goes on, killed mid its tool; the next process runs both, in order. */
+  | "queued";
 const [scenario, phase, file, log, spans] = process.argv.slice(2) as [
   Scenario,
   "first" | "second",
@@ -138,7 +140,8 @@ const step = defineTool({
   ...(scenario === "safe-tool" ||
   scenario === "resource" ||
   scenario === "memory" ||
-  scenario === "connection"
+  scenario === "connection" ||
+  scenario === "queued"
     ? { replay: "safe" as const }
     : {}),
   run: async (_input, runtime: Runtime<{ tag: string }>) => {
@@ -149,6 +152,7 @@ const step = defineTool({
           ? (await runtime.use(notes)).who
           : runtime.context.tag;
     appendFileSync(log, `${seen}\n`);
+    if (phase === "first" && scenario === "queued") await followUp();
     return phase === "first" ? crashPoint() : "stepped";
   },
 });
@@ -214,7 +218,9 @@ faux.setResponses(
   phase === "second"
     ? scenario === "after-submit"
       ? []
-      : [seeing(submit)]
+      : scenario === "queued"
+        ? [seeing(submit), seeing(submit)]
+        : [seeing(submit)]
     : {
         model: [
           fauxAssistantMessage([
@@ -250,6 +256,11 @@ faux.setResponses(
         waiting: [asksStep],
         answered: [asksStep],
         unattended: [asksStep],
+        queued: [
+          fauxAssistantMessage([fauxToolCall("step", {})], {
+            stopReason: "toolUse",
+          }),
+        ],
         "second-run": [
           fauxAssistantMessage(
             [fauxToolCall("submit", { verdict: "raise", note: "first run" })],
@@ -314,6 +325,19 @@ const go = (runId: string, model?: string) =>
       }
       return resultOf(outcome);
     });
+/** The queued scenario's follow-up, admitted while the first run's tool runs: resolves once it is kept. */
+function followUp() {
+  return new Promise<void>((admitted) => {
+    void runtime.run(agent, "Then.", {
+      conversation: "chat-1",
+      runId: "run-2",
+      caller: { id: "crash-test" },
+      context: { tag: "first" },
+      whenBusy: "followUp",
+      onStarted: admitted,
+    });
+  });
+}
 // The second-run scenario's run is the conversation's second, on the fallback model: the first ends before it starts.
 const runId = scenario === "second-run" ? "run-2" : "run-1";
 if (scenario === "second-run" && phase === "first") await go("run-1");
@@ -343,6 +367,8 @@ if (phase === "first") {
   const value = await running.catch((error: unknown) => ({
     failed: (error as { reason?: string }).reason,
   }));
+  // The queued scenario's follow-up, after the first run: the same run id gives its result.
+  const second = scenario === "queued" ? await go("run-2") : undefined;
   const brief = messages.map((message) =>
     message.role === "toolResult"
       ? `${message.toolName}${message.isError ? " error" : ""}`
@@ -355,7 +381,7 @@ if (phase === "first") {
     message.role === "assistant" ? [message.model] : [],
   );
   console.log(
-    `RESULT ${JSON.stringify({ value, calls: faux.state.callCount, ran, messages: brief, models: answeredBy, prompts })}`,
+    `RESULT ${JSON.stringify({ value, second, calls: faux.state.callCount, ran, messages: brief, models: answeredBy, prompts })}`,
   );
   await runtime.close();
 }

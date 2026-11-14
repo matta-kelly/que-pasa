@@ -10,9 +10,9 @@ import { ConversationDoc, RunDoc } from "./state.ts";
 const none = (): UsageState => ({ models: {}, tools: {} });
 
 /**
- * What a run spent: what its conversation spent while the run was its last, from the run's admission to the next run's,
- * or to now for the last run. Runs on a conversation never overlap, so this is all the run spent, failed attempts and
- * compaction included, as pi counts them.
+ * What a run spent: what its conversation spent from the run's start to the next run's start, or to now for the last
+ * run to start. Runs on a conversation never overlap, so this is all the run spent, failed attempts and compaction
+ * included, as pi counts them. A run that never started, such as a steer that joined another, spent nothing of its own.
  */
 export async function usageOf(
   reader: DocumentReader,
@@ -23,14 +23,17 @@ export async function usageOf(
   const runs =
     (await reader.snapshot(ConversationDoc, id, context))?.runs ?? [];
   const at = runs.indexOf(runId);
-  const run = await reader.snapshot(RunDoc, id, runId, context);
-  if (at < 0 || !run) return none();
-  const next = runs[at + 1];
-  const after =
-    next === undefined
-      ? await reader.snapshot(UsageDoc, id, context)
-      : (await reader.snapshot(RunDoc, id, next, context))?.spent;
-  return usageSince(after ?? none(), run.spent);
+  const spent = (await reader.snapshot(RunDoc, id, runId, context))?.spent;
+  if (at < 0 || !spent) return none();
+  // Runs start in the order they were admitted; a steer that joined one never starts.
+  for (const next of runs.slice(at + 1)) {
+    const after = (await reader.snapshot(RunDoc, id, next, context))?.spent;
+    if (after) return usageSince(after, spent);
+  }
+  return usageSince(
+    (await reader.snapshot(UsageDoc, id, context)) ?? none(),
+    spent,
+  );
 }
 
 type Counters = { [key: string]: number | Counters | undefined };

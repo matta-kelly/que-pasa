@@ -89,6 +89,7 @@ import {
   type ConversationState,
   MiddlewareDoc,
   RunDoc,
+  runGoingOn,
   type RunState,
   type TraceParent,
 } from "./state.ts";
@@ -153,7 +154,7 @@ export function createTracing({
     context: Context,
   ) {
     const kept = await reader.snapshot(ConversationDoc, id, context);
-    const runId = kept?.runs.at(-1);
+    const runId = (await runGoingOn(reader, id, context)) ?? kept?.runs.at(-1);
     if (!kept || runId === undefined) return undefined;
     const key = keyOf(id, runId);
     let segment = segments.get(key);

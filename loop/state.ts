@@ -1,7 +1,10 @@
+import type { Context } from "@earendil-works/chord/context";
 import {
   type ConversationId,
   defineDoc,
   defineDocFamily,
+  type DocumentReader,
+  LiveDoc,
   type UsageState,
 } from "@earendil-works/pi-durable";
 import type { Caller, Json, ServiceIdentity } from "../define/index.ts";
@@ -25,8 +28,13 @@ export type ConversationState = {
   caller: Caller;
   /** Absent when it was given none. */
   context?: Json;
-  /** Its runs' ids, in the order they were admitted: the last is the one going on, or the last that ended. */
+  /** Its runs' ids, in the order they were admitted. */
   runs: string[];
+  /**
+   * Each run's id by its input, pi's submission: how the run going on is found from the input that started pi's run.
+   * Absent on a conversation made before it was kept: its run going on is its last.
+   */
+  inputs?: Record<string, string>;
 };
 
 /** The conversation's own document, written in the commit that makes it. */
@@ -49,22 +57,27 @@ export const ConversationDoc = defineDoc<ConversationState>({
 export type RunState = {
   /** The model it runs on, "provider:model-id": the agent's, or the one the run was given. */
   model: string;
-  /** What the conversation had spent when the run was admitted: the run's usage is what it spent after. */
-  spent: UsageState;
+  /**
+   * What the conversation had spent when the run started, before its first model request: its usage is what it spent
+   * after. Absent until it starts; a steer that joined another run never starts one.
+   */
+  spent?: UsageState;
   /** The parent of each of its trace's segments: the host's span it was started in, or its first segment. */
   trace?: TraceParent;
   /** Who each of its connections with a `whoami` is logged in as, by the connection's name: at its start, or once connected. */
   identities?: Record<string, ServiceIdentity>;
   /** Whether someone attends it, to answer what it asks. Absent: nobody does. */
   attended?: boolean;
-  /** What its tool calls asked, by the question's id: kept, so a call that reruns after a restart finds its answer. */
-  interrupts?: Record<string, Asked>;
 };
 
 /** A question a tool call asked, and its answer once given. */
 export type Asked = {
+  /** The run that asked it. */
+  runId: string;
   /** The call that asked it. */
   callId: string;
+  /** Someone attends its run, to answer it. Absent: its run stops with it. */
+  attended?: true;
   value: Json;
   /** Absent until answered. */
   answer?: Json;
@@ -80,7 +93,21 @@ export const RunDoc = defineDocFamily<RunState, null>({
   history: "latest",
   fork: "initial",
   family: true,
-  initial: () => ({ model: "", spent: { models: {}, tools: {} } }),
+  initial: () => ({ model: "" }),
+  checkpointWhen: () => true,
+});
+
+/**
+ * What a conversation's tool calls asked, by the question's id: kept, so a call that reruns after a restart finds its
+ * answer. One run waits at a time, so these are the run going on's; a steer that joined it sees the same.
+ */
+export const InterruptsDoc = defineDoc<{ asked: Record<string, Asked> }>({
+  kind: "que-pasa.interrupts",
+  version: 1,
+  scope: "conversation",
+  history: "latest",
+  fork: "initial",
+  initial: () => ({ asked: {} }),
   checkpointWhen: () => true,
 });
 
@@ -111,3 +138,19 @@ export const MiddlewareDoc = defineDocFamily<{ state: Json }, Json>({
   initial: (state) => ({ state: state ?? null }),
   checkpointWhen: () => true,
 });
+
+/**
+ * The run going on: the run of the input that started pi's run going on, which steers join. Undefined when the
+ * conversation is idle.
+ */
+export async function runGoingOn(
+  reader: DocumentReader,
+  id: ConversationId,
+  context: Context,
+): Promise<string | undefined> {
+  const first = (await reader.snapshot(LiveDoc, id, context))?.run?.inputs[0];
+  if (first === undefined) return undefined;
+  const kept = await reader.snapshot(ConversationDoc, id, context);
+  // A conversation made before it kept its inputs took one run at a time: the one going on is its last.
+  return kept?.inputs?.[first] ?? kept?.runs.at(-1);
+}

@@ -46,15 +46,20 @@ A conversation is pi's conversation, and a run is pi's submission: LangGraph's t
 	- agent, caller and context: given by every run, and the same, or the run is refused: the history and the resources resolved from the context must match
 	- middleware state: each `beforeAgent` runs once, when the conversation is made, as Deep Agents' memory loads once per thread
 	- resources: resolved from the conversation, so a sandbox lives as long as its history
-	- one run at a time: a run while another goes on, or waits on a question, is refused, naming the run (pi's `whenBusy: "reject"`)
+	- one run at a time: the run going on is the run of the input that started pi's run, which a steer may join
+	- an input while a run goes on, or waits on a question: what it does is its run's `whenBusy`, pi's, chosen by whoever sends it, as LangGraph's `multitask_strategy`
+		- `reject`, the default: refused, `busy`, naming the run going on
+		- `followUp`: queued; it starts when the runs before it end, one run per input, in order (LangGraph's `enqueue`). A run that fails does not strand the ones behind it (pi's `afterFailedRun: "continue"`)
+		- `steer`: joins the run going on at its next step, after the current tool round; its outcome is that run's. It starts no run of its own
+		- on an idle conversation every input starts a run at once
 - run: one input on a conversation to its result, by its id in the conversation (`runId`, pi's `requestId`)
-	- model: the run's, or the agent's. Set on the conversation in the commit that admits the run, so the model and the input land together
+	- model: the run's, or the agent's, for a run that starts at once: set on the conversation in the commit that admits it, so the model and the input land together. pi has no model per input, so a run that waits or joins runs on the conversation's model when it starts, the model of the run before it, and gives none (`model` only with `reject`); its document says which
 	- attended: whether someone attends it, to answer what its calls ask (`attended`, set by whoever starts it; nobody by default; the server's runs are attended). Kept in the commit that admits it
-	- questions: what its calls asked, and the answers, kept in its document by the question's id
+	- questions: what its calls asked, and the answers, kept on the conversation by the question's id, with the run that asked: one run waits at a time, and a steer that joined it sees the same. A run that starts at once starts with none
 	- result: read from its own submission, its answer entry and the submit result that answers it, never the conversation's last answer
-	- usage: what the conversation spent from the run's admission to the next run's, or to now for the last run
+	- usage: what the conversation spent from the run's start, before its first model request, to the next run's start, or to now. A queued run is admitted while another goes on, so its admission is not its start; a steer that joined spent nothing of its own
 	- trace: its own, tagged with the conversation's key and its run id
-- not built: queuing or steering an input into a run that goes on (pi's `followUp`, `steer`), a run in the background with join and cancel by its id, a `beforeAgent` per run, and reading a conversation from another process
+- not built: stopping the run going on for a new input (LangGraph's `interrupt` and `rollback`), a run in the background with join and cancel by its id, a `beforeAgent` per run, and reading a conversation from another process
 
 ## States
 
@@ -79,13 +84,13 @@ A tool call that stops before its tool's code runs to ask a person, and goes on 
 - asked by: the call's check of its tool's connections (a missing login: "connect it"), and a middleware's `wrapToolCall` (`request.interrupt(value, answer?)`, such as an approval)
 	- only before the tool's code runs: after it starts, `interrupt` throws. So nothing has happened when a call waits, whatever the tool's `replay`
 	- a question's id: `<call id>:<asker>:<n>`, the n-th question of that asker in the call, so a rerun asks by the same id
-- kept: each question, and then its answer, in the run's document. The wait itself is in memory: a call that reruns after a restart finds its question, and waits again or goes on with its answer
+- kept: each question, and then its answer, on the conversation. The wait itself is in memory: a call that reruns after a restart finds its question, and waits again or goes on with its answer
 	- a crash while a call waits counts toward pi's restart limit (5); a clean close does not
-- answered: `runtime.run(agent, { resume: { [id]: answer } }, { ...same runId })`, in one commit; an answer to a question the run does not wait on is refused, `not_interrupted`
+- answered: `runtime.run(agent, { resume: { [id]: answer } }, { ...same runId })`, in one commit, by the run that asked or a steer that joined it; an answer to a question the run does not wait on is refused, `not_interrupted`
 	- an answer that does not fit the asker's `answer` schema is refused by the call: kept as the question's `error`, and the question is asked again by the same id
 - given back: `run()` gives `interrupted`, with the questions, once the run waits and every running call of its round has asked; the same run id again gives the same questions
-- a run nobody attends: the call keeps its question and stops the run before its tool acts; the run fails, `needs_connection` for a login and `needs_answer` for anything else, with the questions
-- input while a run waits: refused, busy, as for a run that goes on. Not built: taking it, or dropping the question
+- a run nobody attends: the call keeps its question and stops the run before its tool acts; the run fails, `needs_connection` for a login and `needs_answer` for anything else, with the questions. A steer that joined it fails with pi's reason
+- input while a run waits: as while it goes on, by its `whenBusy`. A steer joins it and gives back the same questions; a follow-up starts once the run is answered and ends. Not built: dropping the question for a new input
 
 ## Invariants
 
@@ -95,7 +100,7 @@ What holds in every state of every run. Each is held by construction, and checke
 |---|---|---|
 | one conversation per key, of one agent, caller and context | the conversation index, a session document per key; the conversation document, written once, in the commit that makes it; every run checked against it | `runtime.test.ts`: another agent, caller or context refused |
 | one run per run id in a conversation: the same id again is the same run, never a second | the input in with the run id as pi's `requestId`, looked up before it is admitted | `runtime.test.ts`: the same run id again, one model call |
-| one run at a time on a conversation | the input admitted with `whenBusy: "reject"` | `runtime.test.ts`: a run while another goes on, refused |
+| one run at a time on a conversation, and each input either refused, queued in order, or joined to the run going on | pi's inbox: the input admitted with its `whenBusy`, follow-ups one at a time; the run going on found from pi's run, never from the last admitted | `busy.test.ts`: refused, followed up, steered; `crash.test.ts`: a follow-up queued, killed, both run once, in order |
 | no run state in memory: a new process can go on with any run | the conversation's and the run's documents; the result and the reminders in the transcript | `crash.test.ts`: every crash point, in a new process |
 | a finished step is never done twice | pi's checkpoint per step; a marker kept just before a tool's code runs, so a tool not marked `replay: "safe"` that started never runs again | `crash.test.ts`: mid tool, mid model request, after the submit |
 | a call waits only before its tool acts, so a wait is safe to take up again whatever the tool's replay | `interrupt` refused once the tool started; to pi every que-pasa tool is replay-safe, so a waiting call reruns, and que-pasa keeps the tool's own rule | `crash.test.ts`: killed while a call waits, then answered: the tool runs once |
@@ -107,7 +112,7 @@ What holds in every state of every run. Each is held by construction, and checke
 | the model knows who it acts as in each service, the same in every process | each connection's `whoami`, asked at the run's start for each login there, or once the person connects it, and kept in the run's document; a section renders it from there | `runtime.test.ts`: asked once for a run started twice; said after a connection is connected |
 | a login is never kept | a connection resolves from `credentialFor` in the process, as any resource; never in a document, the transcript or a span; one the service refuses (`LoginRejected`) is dropped, and the next call asks again | `runtime.test.ts`, `trace.test.ts`: the login in no message and no span, with content captured; a refused login asked for again; `crash.test.ts`: the new process asks for it again |
 | a conversation's tools get the same resources in every process | a provider resolves from the conversation document, never from memory; once per run in a process | `crash.test.ts`: the resumed process resolves from the stored context |
-| a run's result, usage and trace are its own, not the conversation's | the result read from the run's submission; the usage from what the conversation had spent at each admission; a segment per run | `runtime.test.ts`, `trace.test.ts`: two runs on one conversation |
+| a run's result, usage and trace are its own, not the conversation's | the result read from the run's submission; the usage from what the conversation had spent at each run's start, kept before its first model request; a segment per run | `runtime.test.ts`, `trace.test.ts`, `busy.test.ts`: two runs on one conversation, also a follow-up queued behind the first |
 | the result is the run's last submit that passed the schema | the submit tool parses with zod before it keeps the result; a failed parse goes back to the model; the reminder counts only the run's own entries | `runtime.test.ts`: a bad submit, then a good one; a second run reminded though the first submitted |
 | every segment of a run is in one trace | the run document keeps the span the run started in, or its first segment | `crash.test.ts`: the resumed segment under the host's span |
 | tracing never fails a run | each hook's tracing runs guarded; an error goes to OpenTelemetry's `diag` | the whole suite runs with and without an SDK |
@@ -126,6 +131,7 @@ One runtime per process owns its storage: `openRuntime({ storage, models, agents
 | mid tool | the call runs again; its tool had started | the model gets an `interrupted` result; the tool does not run again |
 | mid tool, `replay: "safe"` | the tool runs again, with its conversation's context | five crashes in a row (pi's restart limit) stop it, and the model gets an error result |
 | after the submit | the run is settled | `run(runId)` gives back the result, with no model call |
+| a follow-up queued, mid the run before it | the queue is kept; the run goes on, then the follow-up starts | each runs once, in order; `run(runId)` of either gives its result |
 
 `loop/crash.test.ts` kills a real process at each point and opens the SQLite file again in a new one.
 

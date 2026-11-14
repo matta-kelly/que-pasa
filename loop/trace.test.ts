@@ -418,6 +418,80 @@ describe("a run's trace", () => {
     ).not.toContain("tok-very-secret");
   });
 
+  it("gives a follow-up queued behind a run its own trace, its own usage, and its tools' spans", async () => {
+    const { faux, models, model } = scripted();
+    let release = () => {};
+    let holding = () => {};
+    const held = new Promise<void>((resolve) => (holding = resolve));
+    const hold = defineTool({
+      name: "hold",
+      description: "Hold.",
+      schema: z.object({}),
+      run: () =>
+        new Promise<string>((resolve) => {
+          release = () => resolve("held");
+          holding();
+        }),
+    });
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("hold", {})], {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage([
+        fauxText("Paris, the capital and largest city of France."),
+      ]),
+      fauxAssistantMessage([fauxText("Rome.")]),
+    ]);
+    const agent = defineAgent({
+      name: "geo",
+      model,
+      instructions: "Answer.",
+      tools: [hold],
+    });
+    const runtime = await openRuntime({
+      storage: new MemoryStorage(),
+      models,
+      agents: [agent],
+    });
+    try {
+      const first = runtime.run(agent, "Capital of France?", {
+        conversation: "chat-1",
+        runId: "run-1",
+        caller,
+      });
+      await held;
+      let queued = () => {};
+      const admitted = new Promise<void>((resolve) => (queued = resolve));
+      const second = runtime.run(agent, "And of Italy?", {
+        conversation: "chat-1",
+        runId: "run-2",
+        caller,
+        whenBusy: "followUp",
+        onStarted: queued,
+      });
+      await admitted;
+      release();
+      await first.then(resultOf);
+      await second.then(resultOf);
+    } finally {
+      await runtime.close();
+    }
+    const spans = exporter.getFinishedSpans();
+    const runs = named(spans, "invoke_agent");
+    expect(runs.map((span) => span.attributes["que_pasa.run.id"])).toEqual([
+      "run-1",
+      "run-2",
+    ]);
+    const [first, second] = runs;
+    expect(only(spans, "execute_tool").parentSpanContext?.spanId).toBe(
+      first?.spanContext().spanId,
+    );
+    const output = (span: ReadableSpan | undefined) =>
+      span?.attributes["gen_ai.usage.output_tokens"] as number;
+    expect(output(second)).toBeGreaterThan(0);
+    expect(output(second)).toBeLessThan(output(first));
+  });
+
   it("marks on a tool call's span the question it asked and the answer it went on with, and keeps the run open while it waits", async () => {
     exporter.reset();
     const { faux, models, model } = scripted();

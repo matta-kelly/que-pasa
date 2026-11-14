@@ -35,7 +35,13 @@ import {
   type ToolMessage,
 } from "../define/index.ts";
 import { NoLogin, type Resources } from "./resources.ts";
-import { type Asked, ConversationDoc, RunDoc } from "./state.ts";
+import {
+  type Asked,
+  ConversationDoc,
+  InterruptsDoc,
+  RunDoc,
+  runGoingOn,
+} from "./state.ts";
 import type { ToolEvent } from "./trace.ts";
 
 /** Any tool, as an agent holds it. */
@@ -104,7 +110,7 @@ async function call(
 ): Promise<ToolMessage> {
   const { conversationId, callId } = api;
   const kept = await api.snapshot(ConversationDoc, conversationId, context);
-  const runId = kept?.runs.at(-1);
+  const runId = await runGoingOn(api, conversationId, context);
   if (!kept || runId === undefined)
     throw new Error("the conversation has no run going on");
   const { conversation, caller, context: made } = kept;
@@ -270,8 +276,9 @@ export function identityOf(who: ServiceIdentity): ServiceIdentity {
 }
 
 /**
- * Ask one question and wait for its answer. The question is kept in the run's document first; a run nobody attends then
- * stops, and fails with it. An answer that does not fit is refused, kept as the question's error, and waited for again.
+ * Ask one question and wait for its answer. The question is kept in the conversation's questions first; a run nobody
+ * attends then stops, and fails with it. An answer that does not fit is refused, kept as the question's error, and
+ * waited for again.
  */
 async function ask<A>(
   api: ToolExecutionApi,
@@ -284,10 +291,15 @@ async function ask<A>(
 ): Promise<A> {
   const { conversationId, callId } = api;
   const attended = await api.commit(async (tx) => {
-    const run = await tx.doc(RunDoc, conversationId, runId, null);
-    run.interrupts ??= {};
-    run.interrupts[id] ??= { callId, value };
-    return run.attended === true;
+    const attended =
+      (await tx.doc(RunDoc, conversationId, runId, null)).attended === true;
+    (await tx.doc(InterruptsDoc, conversationId)).asked[id] ??= {
+      runId,
+      callId,
+      value,
+      ...(attended ? { attended } : {}),
+    };
+    return attended;
   }, context);
   await event(
     conversationId,
@@ -304,14 +316,13 @@ async function ask<A>(
     return awaitWithContext(new Promise<never>(() => {}), context);
   }
   for (;;) {
-    const given = await answerOf(api, conversationId, runId, id, context);
+    const given = await answerOf(api, conversationId, id, context);
     if (answer === undefined) return given as A;
     const checked = answer.safeParse(given);
     if (checked.success) return checked.data;
     const error = z.prettifyError(checked.error);
     await api.commit(async (tx) => {
-      const asked = (await tx.doc(RunDoc, conversationId, runId, null))
-        .interrupts?.[id];
+      const asked = (await tx.doc(InterruptsDoc, conversationId)).asked[id];
       if (!asked) return;
       delete asked.answer;
       asked.error = error;
@@ -319,19 +330,18 @@ async function ask<A>(
   }
 }
 
-/** The answer to a question, once a person gives it: watched in the run's document, while the call waits. */
+/** The answer to a question, once a person gives it: watched in the conversation's questions, while the call waits. */
 async function answerOf(
   api: ToolExecutionApi,
   conversationId: ConversationId,
-  runId: string,
   id: string,
   context: Context,
 ): Promise<Json> {
   const { context: watching, cancel } = withCancel(context);
   try {
-    const watch = await api.watchDoc(RunDoc, conversationId, runId, watching);
-    if (!watch) throw new Error(`run "${runId}": its document is missing`);
-    const asked = await until(watch, (run) => answered(run.interrupts?.[id]));
+    const watch = await api.watchDoc(InterruptsDoc, conversationId, watching);
+    if (!watch) throw new Error(`question "${id}": it is missing`);
+    const asked = await until(watch, (kept) => answered(kept.asked[id]));
     return asked.answer!;
   } finally {
     cancel();

@@ -79,6 +79,7 @@ async function crashAndResume(scenario: string, crashes = 1) {
   return {
     ...(JSON.parse(line.slice("RESULT ".length)) as {
       value: unknown;
+      second?: unknown;
       calls: number;
       ran: string[];
       messages: string[];
@@ -205,5 +206,15 @@ describe("a run killed at a crash point and opened again in a new process", () =
     const seen = await crashAndResume("unattended");
     expect(seen.value).toEqual({ failed: "needs_answer" });
     expect(seen.ran).toEqual([]);
+  });
+
+  it("a follow-up queued, killed while the run before it goes on: the next process runs both, in order, once each", async () => {
+    const seen = await crashAndResume("queued");
+    expect(seen.value).toEqual(done);
+    expect(seen.second).toEqual(done);
+    // The first run's replay-safe step ran again; the follow-up called no tool.
+    expect(seen.ran).toEqual(["first", "first"]);
+    expect(seen.calls).toBe(2);
+    expect(seen.messages.filter((m) => m === "user")).toHaveLength(2);
   });
 }, 60_000);
