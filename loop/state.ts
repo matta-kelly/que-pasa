@@ -74,6 +74,11 @@ export type RunState = {
 export type Asked = {
   /** The run that asked it. */
   runId: string;
+  /**
+   * Every run of pi's run when it was asked: the one that asked, and the steers that joined it. pi settles all of them
+   * with one outcome, so each fails with this question when nobody can answer it.
+   */
+  runs: string[];
   /** The call that asked it. */
   callId: string;
   /** Someone attends its run, to answer it. Absent: its run stops with it. */

@@ -555,7 +555,7 @@ export async function openRuntime({
       }
       const { settled } = followed;
       if (settled.status !== "done") {
-        // A run nobody attends stopped on its questions. A steer that joined it fails with pi's reason.
+        // A run nobody attends stopped on its questions; a steer that joined it fails with them too.
         const asked = await waitingOf(conversation.id, runId);
         if (asked.length > 0) throw unattended(agent.name, runId, asked);
         throw new RunFailed(
@@ -640,12 +640,12 @@ export async function openRuntime({
     }
   }
 
-  /** The questions a run nobody attends stopped on. */
+  /** The questions a run nobody attends stopped on: asked by it, or by the run it joined as a steer. */
   async function waitingOf(id: ConversationId, runId: string) {
     const kept = await harness.snapshot(InterruptsDoc, id, context);
     return pending(
       kept?.asked ?? {},
-      (question) => question.runId === runId && !question.attended,
+      (question) => question.runs.includes(runId) && !question.attended,
     );
   }
 

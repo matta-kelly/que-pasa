@@ -17,6 +17,7 @@ import type { WatchHandle } from "@earendil-works/chord";
 import {
   type ConversationId,
   defineTool as definePiTool,
+  LiveDoc,
   type ToolExecutionApi,
 } from "@earendil-works/pi-durable";
 import { randomUUID } from "node:crypto";
@@ -293,8 +294,14 @@ async function ask<A>(
   const attended = await api.commit(async (tx) => {
     const attended =
       (await tx.doc(RunDoc, conversationId, runId, null)).attended === true;
+    const { inputs } = await tx.doc(ConversationDoc, conversationId);
+    const live = await tx.doc(LiveDoc, conversationId);
+    const runs = (live.run?.inputs ?? []).flatMap((input) =>
+      inputs?.[input] === undefined ? [] : [inputs[input]],
+    );
     (await tx.doc(InterruptsDoc, conversationId)).asked[id] ??= {
       runId,
+      runs: runs.includes(runId) ? runs : [runId, ...runs],
       callId,
       value,
       ...(attended ? { attended } : {}),

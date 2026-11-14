@@ -89,7 +89,7 @@ A tool call that stops before its tool's code runs to ask a person, and goes on 
 - answered: `runtime.run(agent, { resume: { [id]: answer } }, { ...same runId })`, in one commit, by the run that asked or a steer that joined it; an answer to a question the run does not wait on is refused, `not_interrupted`
 	- an answer that does not fit the asker's `answer` schema is refused by the call: kept as the question's `error`, and the question is asked again by the same id
 - given back: `run()` gives `interrupted`, with the questions, once the run waits and every running call of its round has asked; the same run id again gives the same questions
-- a run nobody attends: the call keeps its question and stops the run before its tool acts; the run fails, `needs_connection` for a login and `needs_answer` for anything else, with the questions. A steer that joined it fails with pi's reason
+- a run nobody attends: the call keeps its question and stops the run before its tool acts; the run fails, `needs_connection` for a login and `needs_answer` for anything else, with the questions. A steer that joined it fails the same, with the same questions: pi settles every input of a run with one outcome, and a question keeps every run of pi's run when it was asked
 - input while a run waits: as while it goes on, by its `whenBusy`. A steer joins it and gives back the same questions; a follow-up starts once the run is answered and ends. Not built: dropping the question for a new input
 
 ## Invariants

@@ -269,6 +269,23 @@ describe("an input to a busy conversation", () => {
     ).resolves.toBe("Sent.");
   });
 
+  it("fails a steer that joined a run nobody attends with the question that stopped it, as the run it joined", async () => {
+    const runtime = await open();
+    nextHold();
+    faux.setResponses([calls("hold", "h"), calls("send", "s")]);
+    const first = start(runtime, "One.", "1");
+    await holding;
+    const steer = start(runtime, "Send it.", "2", { whenBusy: "steer" });
+    await steer.started;
+    release();
+    const stopped = {
+      reason: "needs_answer",
+      interrupts: [{ id: "s:human-in-the-loop:0" }],
+    };
+    await expect(first.outcome).rejects.toMatchObject(stopped);
+    await expect(steer.outcome).rejects.toMatchObject(stopped);
+  });
+
   it("starts a follow-up queued behind a run that waits once that run is answered", async () => {
     const runtime = await open();
     faux.setResponses([calls("send", "s"), says("Sent."), says("Second.")]);
