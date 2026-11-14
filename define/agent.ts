@@ -67,6 +67,7 @@ export function defineAgent<
     seen.add(tool.name);
   }
   const named = new Set<string>();
+  const brought = new Set<string>();
   for (const middleware of agent.middleware ?? []) {
     if (named.has(middleware.name)) {
       throw new Error(
@@ -74,6 +75,14 @@ export function defineAgent<
       );
     }
     named.add(middleware.name);
+    for (const tool of middleware.tools ?? []) {
+      if (brought.has(tool.name)) {
+        throw new Error(
+          `agent "${agent.name}": two middleware bring a tool named "${tool.name}"`,
+        );
+      }
+      brought.add(tool.name);
+    }
   }
   return Object.freeze({
     ...agent,

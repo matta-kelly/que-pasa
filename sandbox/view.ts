@@ -3,7 +3,7 @@ import { fromRoot, isUnder } from "./paths.ts";
 
 /** The files a view holds: paths from the backend's root, or absolute under it. */
 export type ViewPaths = {
-  /** The files it may read. */
+  /** The files it may read; a folder, everything under it. */
   read: readonly string[];
   /** The files it may write: it may read them too. */
   write: readonly string[];
@@ -27,16 +27,16 @@ export function view(backend: FileBackend, paths: ViewPaths): FileBackend {
     });
   const writes = new Set(checked(paths.write));
   const files = [...new Set([...checked(paths.read), ...writes])];
-  const mine = new Set(files);
 
-  /** A path of the view: one of its files, or a folder on the way to one. */
-  const sees = (at: string) => files.some((f) => f === at || isUnder(f, at));
+  /** A path of the view: one of its files, under one of its folders, or a folder on the way to one. */
+  const sees = (at: string) =>
+    files.some((f) => isUnder(at, f) || isUnder(f, at));
   /** A path the view resolves, or undefined when it is outside the root. */
   const at = (path: string) => fromRoot(root, path);
   const missing = { error: "file_not_found" } as const;
   const invalid = { error: "invalid_path" } as const;
-  /** A path the backend gave back that is one of the view's files. */
-  const own = (path: string) => mine.has(path);
+  /** A path the backend gave back that is one of the view's files, or under one of its folders. */
+  const own = (path: string) => files.some((f) => isUnder(path, f));
   const refused = (path: string) => ({
     error: "permission_denied" as const,
     message: `${path} is not a file this view may write: it may write ${[...writes].join(", ") || "none"}`,

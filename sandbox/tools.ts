@@ -69,73 +69,158 @@ const path = () =>
 /** A folder the model may leave out: the root. */
 const folder = () => path().default(".");
 
-export const ls = defineTool({
-  name: "ls",
-  description:
-    "Lists the files and folders in a folder of the sandbox. A folder ends in a slash.",
-  schema: z.object({ path: folder() }),
+/**
+ * Deep Agents' four read tools, `ls`, `read_file`, `glob` and `grep`, reading where `from` says: the conversation's
+ * `Sandbox`, or a backend of its own, such as a middleware's view over its folders.
+ */
+function reading(
+  from: (runtime: Any) => FileBackend | Promise<FileBackend>,
+  uses: { uses?: readonly [typeof Sandbox] },
+) {
+  return {
+    ls: defineTool({
+      name: "ls",
+      description:
+        "Lists the files and folders in a folder of the sandbox. A folder ends in a slash.",
+      schema: z.object({ path: folder() }),
+      ...uses,
+      replay: "safe",
+      run: async ({ path }, runtime: Any) => {
+        const result = await (await from(runtime)).ls(path);
+        const failed = failure(result, "ls", path);
+        if (failed) return failed;
+        const files = result.files ?? [];
+        if (files.length === 0) return `No files found in '${path}'`;
+        return cut(
+          files.map((f) => (f.isDir ? `${f.path}/` : f.path)).join("\n"),
+        );
+      },
+    }),
+    read_file: defineTool({
+      name: "read_file",
+      description:
+        "Reads a file from the sandbox. Assume any path the user provides is valid; reading a missing file returns an error. " +
+        "By default it reads up to 100 lines from the start; use offset and limit to page through a large file. " +
+        "A status header, `@@ lines A-B of T | next offset N @@`, sits above the file content, and every line after it is " +
+        "the file's content, verbatim. Never include the header when editing. Always read a file before editing it.",
+      schema: z.object({
+        file_path: path(),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .default(0)
+          .describe("Line offset to start reading from (0-indexed)."),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .default(100)
+          .describe(
+            "Maximum number of lines to read. Use for pagination of large files.",
+          ),
+      }),
+      ...uses,
+      replay: "safe",
+      run: async ({ file_path, offset, limit }, runtime: Any) => {
+        const result = await (
+          await from(runtime)
+        ).read(file_path, offset, limit);
+        const failed = failure(result, "read", file_path);
+        if (failed) return failed;
+        const total = result.totalLines ?? 0;
+        if (total === 0)
+          return "System reminder: File exists but has empty contents";
+        if (offset >= total)
+          return `Error: Line offset ${offset} exceeds file length (${total} lines)`;
+        let content = result.content ?? "";
+        let note = "";
+        if (content.length > maxAnswer) {
+          const head = content.slice(0, maxAnswer);
+          content = head.slice(0, head.lastIndexOf("\n") + 1);
+          note = " | truncated due to size";
+        }
+        const lines = content.split("\n").length - 1;
+        const end = offset + lines;
+        const next = end < total ? ` | next offset ${end}` : "";
+        return `@@ lines ${offset + 1}-${end} of ${total}${next}${note} @@\n${content}`;
+      },
+    }),
+    glob: defineTool({
+      name: "glob",
+      description:
+        "Finds the files of the sandbox whose path matches a glob pattern, under a folder: `*` matches within a folder, " +
+        "`**` across folders, as in `**/*.test.ts`. Paths are from the sandbox's root.",
+      schema: z.object({
+        pattern: z
+          .string()
+          .min(1)
+          .describe("The glob pattern, matched against the path from `path`."),
+        path: folder(),
+      }),
+      ...uses,
+      replay: "safe",
+      run: async ({ pattern, path }, runtime: Any) => {
+        const result = await (await from(runtime)).glob(pattern, path);
+        const failed = failure(result, "glob", path);
+        if (failed) return failed;
+        const files = result.files ?? [];
+        if (files.length === 0)
+          return `No files found matching pattern '${pattern}'`;
+        return cut(files.join("\n") + (result.truncated ? cutNote : ""));
+      },
+    }),
+    grep: defineTool({
+      name: "grep",
+      description:
+        "Search for a LITERAL text pattern across files (NOT regex), under a path, in files matching glob if given. " +
+        "Gives each matching file, then each matching line with its number.",
+      schema: z.object({
+        pattern: z.string().min(1).describe("The text to find, as is."),
+        path: folder(),
+        glob: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Only files whose path from `path` matches this glob, such as `*.ts`.",
+          ),
+      }),
+      ...uses,
+      replay: "safe",
+      run: async ({ pattern, path, glob }, runtime: Any) => {
+        const result = await (await from(runtime)).grep(pattern, path, glob);
+        const failed = failure(result, "grep", path);
+        if (failed) return failed;
+        const matches = result.matches ?? [];
+        if (matches.length === 0)
+          return `No matches found for pattern '${pattern}'`;
+        const byFile = new Map<string, string[]>();
+        for (const m of matches) {
+          const lines = byFile.get(m.path) ?? [];
+          lines.push(`  ${m.line}: ${m.text}`);
+          byFile.set(m.path, lines);
+        }
+        const text = [...byFile]
+          .map(([f, lines]) => `${f}:\n${lines.join("\n")}`)
+          .join("\n");
+        return cut(text + (result.truncated ? cutNote : ""));
+      },
+    }),
+  };
+}
+
+export const { ls, read_file, glob, grep } = reading(sandbox, {
   uses: [Sandbox],
-  replay: "safe",
-  run: async ({ path }, runtime: Any) => {
-    const result = await (await sandbox(runtime)).ls(path);
-    const failed = failure(result, "ls", path);
-    if (failed) return failed;
-    const files = result.files ?? [];
-    if (files.length === 0) return `No files found in '${path}'`;
-    return cut(files.map((f) => (f.isDir ? `${f.path}/` : f.path)).join("\n"));
-  },
 });
 
-export const read_file = defineTool({
-  name: "read_file",
-  description:
-    "Reads a file from the sandbox. Assume any path the user provides is valid; reading a missing file returns an error. " +
-    "By default it reads up to 100 lines from the start; use offset and limit to page through a large file. " +
-    "A status header, `@@ lines A-B of T | next offset N @@`, sits above the file content, and every line after it is " +
-    "the file's content, verbatim. Never include the header when editing. Always read a file before editing it.",
-  schema: z.object({
-    file_path: path(),
-    offset: z
-      .number()
-      .int()
-      .min(0)
-      .default(0)
-      .describe("Line offset to start reading from (0-indexed)."),
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .default(100)
-      .describe(
-        "Maximum number of lines to read. Use for pagination of large files.",
-      ),
-  }),
-  uses: [Sandbox],
-  replay: "safe",
-  run: async ({ file_path, offset, limit }, runtime: Any) => {
-    const result = await (
-      await sandbox(runtime)
-    ).read(file_path, offset, limit);
-    const failed = failure(result, "read", file_path);
-    if (failed) return failed;
-    const total = result.totalLines ?? 0;
-    if (total === 0)
-      return "System reminder: File exists but has empty contents";
-    if (offset >= total)
-      return `Error: Line offset ${offset} exceeds file length (${total} lines)`;
-    let content = result.content ?? "";
-    let note = "";
-    if (content.length > maxAnswer) {
-      const head = content.slice(0, maxAnswer);
-      content = head.slice(0, head.lastIndexOf("\n") + 1);
-      note = " | truncated due to size";
-    }
-    const lines = content.split("\n").length - 1;
-    const end = offset + lines;
-    const next = end < total ? ` | next offset ${end}` : "";
-    return `@@ lines ${offset + 1}-${end} of ${total}${next}${note} @@\n${content}`;
-  },
-});
+/**
+ * Deep Agents' read tools over one backend, not the conversation's `Sandbox`: for a middleware that brings its own
+ * files, such as skills, to an agent that has no sandbox.
+ */
+export function readToolsOver(backend: FileBackend) {
+  return reading(() => backend, {});
+}
 
 export const write_file = defineTool({
   name: "write_file",
@@ -193,69 +278,6 @@ export const edit_file = defineTool({
       failure(result, "edit", file_path, old_string) ??
       `Successfully replaced ${result.occurrences} occurrence(s) in '${file_path}'`
     );
-  },
-});
-
-export const glob = defineTool({
-  name: "glob",
-  description:
-    "Finds the files of the sandbox whose path matches a glob pattern, under a folder: `*` matches within a folder, " +
-    "`**` across folders, as in `**/*.test.ts`. Paths are from the sandbox's root.",
-  schema: z.object({
-    pattern: z
-      .string()
-      .min(1)
-      .describe("The glob pattern, matched against the path from `path`."),
-    path: folder(),
-  }),
-  uses: [Sandbox],
-  replay: "safe",
-  run: async ({ pattern, path }, runtime: Any) => {
-    const result = await (await sandbox(runtime)).glob(pattern, path);
-    const failed = failure(result, "glob", path);
-    if (failed) return failed;
-    const files = result.files ?? [];
-    if (files.length === 0)
-      return `No files found matching pattern '${pattern}'`;
-    return cut(files.join("\n") + (result.truncated ? cutNote : ""));
-  },
-});
-
-export const grep = defineTool({
-  name: "grep",
-  description:
-    "Search for a LITERAL text pattern across files (NOT regex), under a path, in files matching glob if given. " +
-    "Gives each matching file, then each matching line with its number.",
-  schema: z.object({
-    pattern: z.string().min(1).describe("The text to find, as is."),
-    path: folder(),
-    glob: z
-      .string()
-      .min(1)
-      .optional()
-      .describe(
-        "Only files whose path from `path` matches this glob, such as `*.ts`.",
-      ),
-  }),
-  uses: [Sandbox],
-  replay: "safe",
-  run: async ({ pattern, path, glob }, runtime: Any) => {
-    const result = await (await sandbox(runtime)).grep(pattern, path, glob);
-    const failed = failure(result, "grep", path);
-    if (failed) return failed;
-    const matches = result.matches ?? [];
-    if (matches.length === 0)
-      return `No matches found for pattern '${pattern}'`;
-    const byFile = new Map<string, string[]>();
-    for (const m of matches) {
-      const lines = byFile.get(m.path) ?? [];
-      lines.push(`  ${m.line}: ${m.text}`);
-      byFile.set(m.path, lines);
-    }
-    const text = [...byFile]
-      .map(([f, lines]) => `${f}:\n${lines.join("\n")}`)
-      .join("\n");
-    return cut(text + (result.truncated ? cutNote : ""));
   },
 });
 

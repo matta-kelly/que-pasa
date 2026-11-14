@@ -59,7 +59,7 @@ A backend is the place where a run's files are and its commands run, behind one 
 	- made on its first call and kept: started again if it stopped, made again if it is gone, so a run that resumes after a host restart needs no host step
 	- labelled with a hash of its options: a container of its name made with other options is refused, never used
 	- `network` is "none" by default; `close()` removes it
-- `view(backend, { read, write })`: a files backend over another, limited to some files
+- `view(backend, { read, write })`: a files backend over another, limited to some files; a folder it reads holds everything under it
 	- a path outside it is answered as missing, in a download too; a write outside its write files is refused, with the files it may write
 	- its search runs once on the backend, and keeps only its own files, as Deep Agents filters its path rules' results. The backend reads the files under the path to search them, and its limit counts them too, so a cut result says it is cut
 
@@ -78,6 +78,7 @@ A backend is the place where a run's files are and its commands run, behind one 
 | `execute` | a shell command in the root: its output, then how it ended | never: a command can do anything |
 
 - sets: `readTools` (ls, read_file, glob, grep), `fileTools` (those, write_file and edit_file). `execute` is given on its own
+- `readToolsOver(backend)`: the four read tools over one backend, not the conversation's `Sandbox`: the same names, parameters and answers, for a middleware that brings its own files, such as skills ([[que-pasa-middleware#Skills]]). They declare no resource
 - an answer is cut at 80,000 characters (`maxAnswer`): a listing at a whole line, a read at a whole line with the offset to go on from, a command's output to its tail, where a failure is
 - `commandAnswer(result)`: `execute`'s answer, so a host tool that runs a command, such as a test, answers the same way
 

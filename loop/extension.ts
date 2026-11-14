@@ -18,6 +18,7 @@ import {
   type Json,
   type Middleware,
   type ServiceIdentity,
+  type Tool,
 } from "../define/index.ts";
 import { jsonSchema, toPiTool } from "./call.ts";
 import type { Resources } from "./resources.ts";
@@ -52,12 +53,13 @@ export function agentExtension(
   event: ToolEvent,
 ): Extension {
   const { output } = agent;
-  if (output && agent.tools.some((tool) => tool.name === submitTool)) {
+  const given = toolsOf(agent);
+  if (output && given.some((tool) => tool.name === submitTool)) {
     throw new Error(
       `agent "${agent.name}": a tool is named "${submitTool}", which its output needs`,
     );
   }
-  const tools = agent.tools.map((tool) =>
+  const tools = given.map((tool) =>
     toPiTool(tool, agent.middleware ?? [], resources, event),
   );
   if (output) tools.push(submit(output));
@@ -76,10 +78,26 @@ export function agentExtension(
   });
 }
 
+/**
+ * The tools the model is given: the agent's own, then each middleware's, in order. A middleware tool whose name the
+ * agent has already is left out, so the agent's own is the one called, such as its sandbox's `read_file`.
+ */
+export function toolsOf(
+  agent: AnyAgent,
+): Tool<z.ZodObject, Json | undefined>[] {
+  const named = new Set(agent.tools.map((tool) => tool.name));
+  return [
+    ...agent.tools,
+    ...(agent.middleware ?? [])
+      .flatMap((middleware) => middleware.tools ?? [])
+      .filter((tool) => !named.has(tool.name)),
+  ];
+}
+
 /** The connections the agent's tools use, each once, in the order its tools name them. */
 export function connectionsOf(agent: AnyAgent): Connection[] {
   const byName = new Map<string, Connection>();
-  for (const tool of agent.tools) {
+  for (const tool of toolsOf(agent)) {
     for (const resource of tool.uses ?? []) {
       if (isConnection(resource)) byName.set(resource.name, resource);
     }

@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import type { Caller, ConversationOf, Json } from "./runtime.ts";
+import type { Tool } from "./tool.ts";
 
 /**
  * An optional behaviour on an agent's loop, after LangChain's middleware: a name and hooks, each optional. S is the state
@@ -8,12 +9,17 @@ import type { Caller, ConversationOf, Json } from "./runtime.ts";
  *
  * Its hooks are methods, so a middleware of any state goes in an agent's list of `Middleware`.
  *
- * Built: `beforeAgent` and `systemPrompt`, which memory needs, and `wrapToolCall`, which approvals need. LangChain's others
- * (`before_model`, `after_model`, `after_agent`) are not built yet.
+ * Built: `beforeAgent` and `systemPrompt`, which memory needs, `wrapToolCall`, which approvals need, and `tools`, which
+ * skills need. LangChain's others (`before_model`, `after_model`, `after_agent`) are not built yet.
  */
 export type Middleware<S extends Json = Json> = {
   /** kebab-case, and one per agent: the key of the state it keeps. */
   readonly name: string;
+  /**
+   * Tools it brings to the agent, as LangChain middleware's `tools`: after the agent's own. One whose name an agent tool
+   * has already is left out, so the agent's own is the one the model calls.
+   */
+  readonly tools?: readonly Tool<z.ZodObject, Json | undefined>[];
   /**
    * LangChain's `before_agent`, run once per conversation, as Deep Agents' memory loads once per thread: when its first
    * run makes it, before any model call. What it gives back is the middleware's state for the conversation, kept in the

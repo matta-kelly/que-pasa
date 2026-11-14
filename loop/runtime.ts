@@ -40,6 +40,7 @@ import {
   agentExtension,
   connectionsOf,
   submitTool,
+  toolsOf,
 } from "./extension.ts";
 import {
   createResources,
@@ -181,7 +182,7 @@ export async function openRuntime({
   const resources = createResources(providers, credentialFor);
   resources.check(
     agents.flatMap((agent) =>
-      agent.tools.flatMap((tool) =>
+      toolsOf(agent).flatMap((tool) =>
         (tool.uses ?? []).map((resource) => ({ tool: tool.name, resource })),
       ),
     ),

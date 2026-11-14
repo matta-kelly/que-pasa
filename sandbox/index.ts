@@ -34,6 +34,7 @@ export {
   maxAnswer,
   read_file,
   readTools,
+  readToolsOver,
   write_file,
 } from "./tools.ts";
 export { view, type ViewPaths } from "./view.ts";

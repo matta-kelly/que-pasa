@@ -53,6 +53,23 @@ describe("a view", () => {
     ]);
   });
 
+  it("holds everything under a folder it reads, and nothing beside it", async () => {
+    const folder = view(free, { read: ["src/lib"], write: [] });
+    expect((await folder.read("src/lib/a.ts", 0, 10)).content).toBe(
+      "const a = 3;\n",
+    );
+    expect((await folder.ls("src")).files?.map((f) => f.path)).toEqual([
+      "src/lib",
+    ]);
+    expect(await folder.read("src/c.ts", 0, 10)).toEqual({
+      error: "file_not_found",
+    });
+    expect((await folder.glob("**/*.ts", ".")).files).toEqual(["src/lib/a.ts"]);
+    expect(await folder.write("src/lib/a.ts", "x")).toMatchObject({
+      error: "permission_denied",
+    });
+  });
+
   it("globs and greps only its files that are there", async () => {
     expect((await bound.glob("**/*.ts", ".")).files).toEqual([
       "src/b.ts",

@@ -70,7 +70,18 @@ const reviewer = defineAgent({
 });
 ```
 
-What middleware is, and how memory and approval work: `middleware/que-pasa-middleware.md`.
+`skills` gives an agent folders of know-how: it sees each skill's name and description, and reads a skill's `SKILL.md` with `read_file` when a task matches. An agent with no file tools gets a read-only `read_file` over the skill folders:
+
+```ts
+import { skills } from "@mku1tra/que-pasa/middleware";
+
+const seller = defineAgent({
+  name: "seller", model, instructions, tools,
+  middleware: [skills({ backend: local({ root: workspace }), sources: ["skills"] })], // skills/<skill>/SKILL.md
+});
+```
+
+What middleware is, and how memory, skills and approval work: `middleware/que-pasa-middleware.md`.
 
 A tool reaches an outside service through a connection: the workspace says what it is and whose login it uses, and the deployment hands over the logins from its control plane. A tool gets the connection, never the login. A call that needs a login the caller has not given asks them to connect it, in a run someone attends; a run nobody attends is refused at its start:
 

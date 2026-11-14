@@ -82,6 +82,7 @@ import {
   identityText,
   reminder,
   submitTool,
+  toolsOf,
 } from "./extension.ts";
 import {
   ConversationDoc,
@@ -457,9 +458,9 @@ async function systemOf(
   return [...parts, agent.instructions];
 }
 
-/** The tools as the model is given them: the agent's, and submit when it has an output. */
+/** The tools as the model is given them: the agent's and its middleware's, and submit when it has an output. */
 function toolDefinitions(agent: AnyAgent) {
-  const tools = agent.tools.map((tool) => ({
+  const tools = toolsOf(agent).map((tool) => ({
     type: "function",
     name: tool.name,
     description: tool.description,

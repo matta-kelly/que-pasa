@@ -150,6 +150,24 @@ describe("defineAgent", () => {
       defineAgent({ ...salesRep, middleware: [memory, memory] }),
     ).toThrow('two middleware are named "memory"');
   });
+
+  it("refuses two middleware that bring a tool of one name", () => {
+    const read = defineTool({
+      name: "read_file",
+      description: "Read a file.",
+      schema: z.object({}),
+      run: () => "",
+    });
+    expect(() =>
+      defineAgent({
+        ...salesRep,
+        middleware: [
+          defineMiddleware({ name: "first", tools: [read] }),
+          defineMiddleware({ name: "second", tools: [read] }),
+        ],
+      }),
+    ).toThrow('two middleware bring a tool named "read_file"');
+  });
 });
 
 describe("defineMiddleware", () => {
