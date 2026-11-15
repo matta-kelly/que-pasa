@@ -633,7 +633,7 @@ describe("the server's history routes", () => {
 
 describe("the server's operations, for a way in in the same process", () => {
   const request = (caller?: string) =>
-    new Request("http://que/mcp", { headers: caller ? as(caller) : {} });
+    new Request("http://que/", { headers: caller ? as(caller) : {} });
 
   it("list the caller's agents, and run to the outcome as the routes do", async () => {
     const server = await serve();
@@ -769,9 +769,16 @@ describe("the server's operations, for a way in in the same process", () => {
     release();
     await expect(outcome).resolves.toMatchObject({
       status: "failed",
-      error: { code: "aborted" },
+      error: { code: "stopped" },
     });
     expect(alive).toBeGreaterThanOrEqual(1);
     expect(calls()).toBe(1);
+    // Stopped as a person's stop is: the run ends stopped, and the conversation is idle.
+    await expect(
+      server.runOf(request("owner"), "c", "1"),
+    ).resolves.toMatchObject({ status: "stopped" });
+    await expect(
+      server.conversation(request("owner"), "c"),
+    ).resolves.toMatchObject({ status: "idle" });
   });
 });

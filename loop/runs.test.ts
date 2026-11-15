@@ -271,6 +271,23 @@ describe("stopping a run", () => {
     expect(await runtime.stop("none", "1")).toBeUndefined();
   });
 
+  it("stops the run going on when its signal aborts, as a stop does: it ends stopped, and the conversation is idle", async () => {
+    const runtime = await open();
+    faux.setResponses([calls("hold", "h"), says("Too late.")]);
+    const going = holding();
+    const client = new AbortController();
+    const reason = new Error("the client went away");
+    const one = start(runtime, "Hold.", "1", { signal: client.signal });
+    await going;
+    client.abort(reason);
+    await expect(one.outcome).rejects.toBe(reason);
+    expect(await runtime.runOf("c", "1")).toMatchObject({ status: "stopped" });
+    const kept = await runtime.conversation("c");
+    expect(kept).toMatchObject({ status: "idle" });
+    expect(kept).not.toHaveProperty("runFailure");
+    expect(await runtime.stop("c", "1")).toBe("ended");
+  });
+
   it("stops a run that waits on a question, and its tool never runs", async () => {
     const runtime = await open();
     faux.setResponses([calls("send", "s"), says("Sent.")]);

@@ -126,7 +126,7 @@ const server = createServer({
 serve({ fetch: server.fetch, port: 8080 });
 ```
 
-It answers `GET /ok`, `GET /agents`, and `POST /conversations/{conversation}/runs/wait` with `{ agent, runId, input }`, or `{ agent, runId, command: { resume } }` to answer a run's questions, after LangGraph's Agent Server. A client reads its history with `GET /conversations` (its conversations, newest first), `GET /conversations/{conversation}` (how one stands: its status, the run going on and the questions it waits on) and `GET /conversations/{conversation}/entries` (pi's transcript records, a page at a time). `GET /conversations/{conversation}/runs` lists its runs, and `POST /conversations/{conversation}/runs/{runId}/cancel` stops one. A way in in the same process, such as an MCP layer, calls `server.agents(request)` and `server.run(request, agent, { conversation, runId, input })`, or `{ conversation, runId, resume }`, and `server.conversations`, `server.conversation`, `server.entries`, `server.runs`, `server.runOf` and `server.stop`. Its runs are attended: a run that asks gives back `interrupted`, with its questions. The routes, the refusals and a long run: `server/que-pasa-server.md`.
+It answers `GET /ok`, `GET /agents`, and `POST /conversations/{conversation}/runs/wait` with `{ agent, runId, input }`, or `{ agent, runId, command: { resume } }` to answer a run's questions, after LangGraph's Agent Server. A client reads its history with `GET /conversations` (its conversations, newest first), `GET /conversations/{conversation}` (how one stands: its status, the run going on and the questions it waits on) and `GET /conversations/{conversation}/entries` (pi's transcript records, a page at a time). `GET /conversations/{conversation}/runs` lists its runs, and `POST /conversations/{conversation}/runs/{runId}/cancel` stops one. A way in in the same process, such as a Slack app, calls `server.agents(request)` and `server.run(request, agent, { conversation, runId, input })`, or `{ conversation, runId, resume }`, and `server.conversations`, `server.conversation`, `server.entries`, `server.runs`, `server.runOf` and `server.stop`. Its runs are attended: a run that asks gives back `interrupted`, with its questions. The routes, the refusals and a long run: `server/que-pasa-server.md`.
 
 A chat in a browser uses the server's chat surface, the AI SDK's chat protocol at `/chat`: `useChat` streams a run's answer as it is written, its tool calls and its approvals, and resumes the stream after a reload, with no glue:
 
@@ -141,6 +141,22 @@ const { messages, sendMessage, addToolApprovalResponse } = useChat<ChatMessage>(
 ```
 
 A stop button posts `{ runId }` to `/chat/{conversation}/stop`. How a run becomes messages, and how the stream follows it: `server/chat/que-pasa-chat.md`.
+
+An MCP client uses the server's MCP surface at `/mcp`: each agent the caller is given is a tool that takes `{ input }`, and a call is one run, kept in the caller's history. Nobody can answer a question inside an MCP call, so a run that would ask a person stops before that step and the call says what is needed, such as where to connect a login. In Claude Code's `.mcp.json`, with the header the deployment's sign-in reads:
+
+```json
+{
+  "mcpServers": {
+    "agents": {
+      "type": "http",
+      "url": "https://agents.example.com/mcp",
+      "headers": { "Authorization": "Bearer ${AGENTS_TOKEN}" }
+    }
+  }
+}
+```
+
+How a call becomes a run, and what it gives back: `server/mcp/que-pasa-mcp.md`.
 
 ## Use it from another project
 

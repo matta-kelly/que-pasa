@@ -1,8 +1,9 @@
 /**
  * The server: a deployment's agents, reached from outside its process, after LangGraph's Agent Server. It asks the
  * deployment who is calling, which agents they are given and what context a conversation has, then runs the agent on
- * the deployment's runtime. Its HTTP API is LangGraph's routes in pi's words; its operations serve a way in that lives in
- * the same process, such as an MCP layer.
+ * the deployment's runtime. Its HTTP API is LangGraph's routes in pi's words, with two surfaces on the same runs: the
+ * AI SDK's chat at `/chat`, and MCP at `/mcp`. Its operations serve a way in that lives in the same process, such as a
+ * Slack app.
  */
 import type {
   Cursor,
@@ -33,6 +34,7 @@ import {
 } from "../loop/index.ts";
 
 import { chatRoutes } from "./chat/routes.ts";
+import { mcpRoutes } from "./mcp/routes.ts";
 import { shownInfo } from "./questions.ts";
 import { Refused, ServerError } from "./errors.ts";
 import {
@@ -47,7 +49,7 @@ import {
 export { Refused, ServerError };
 
 /** Any agent, as a deployment gives it. */
-type AnyAgent = Agent<z.ZodObject | undefined, Json | undefined>;
+export type AnyAgent = Agent<z.ZodObject | undefined, Json | undefined>;
 
 /** What a deployment answers for the server. */
 export type ServerOptions = {
@@ -110,14 +112,19 @@ export type RunRequest = { conversation: string; runId: string } & (
  */
 export type RunOutcome =
   | { status: "done"; result: unknown }
-  | { status: "failed"; error: { code: string; message: string } }
+  | {
+      status: "failed";
+      error: { code: string; message: string };
+      /** The questions a run nobody attends stopped on, as MCP's runs: `needs_connection` or `needs_answer`. */
+      interrupts?: Interrupt[];
+    }
   | { status: "interrupted"; interrupts: Interrupt[] };
 
 /** How a client in the same process follows a run. */
 export type RunControl = {
   /** Stops the run when it aborts. Left out, the run goes on whatever the client does, and the same run id gives its result. */
   signal?: AbortSignal;
-  /** Called each second while the run goes on: for a client that must show it is alive, such as an MCP progress notification. */
+  /** Called each second while the run goes on: for a client that must show it is alive, such as a progress bar. */
   onKeepAlive?: () => void;
 };
 
@@ -296,13 +303,15 @@ export function createServer({
 
   /**
    * Admit a run: answer the deployment's questions, start it, and settle once it is admitted. Every refusal throws here,
-   * as a `ServerError`; what is left is how it ends.
+   * as a `ServerError`; what is left is how it ends. A run is attended, as a person is at the other end to answer what it
+   * asks, except where nobody can answer: MCP's.
    */
   async function start(
     request: Request,
     name: string,
     asked: RunRequest,
     { signal, onKeepAlive }: RunControl = {},
+    attended = true,
   ): Promise<{ outcome: Promise<RunOutcome> }> {
     const { conversation, runId } = asked;
     const input =
@@ -333,12 +342,11 @@ export function createServer({
     });
     let admitted = () => {};
     const started = new Promise<void>((resolve) => (admitted = resolve));
-    // A person is at the other end of the server, to answer what a run asks.
     const running = runtime.run(agent, input, {
       conversation,
       runId,
       caller,
-      attended: true,
+      attended,
       ...(asked.whenBusy === undefined ? {} : { whenBusy: asked.whenBusy }),
       ...(context === undefined ? {} : { context }),
       ...(signal ? { signal } : {}),
@@ -369,6 +377,18 @@ export function createServer({
       : { ...interrupt, value: { ...value, connectUrl: url } };
   }
 
+  /** The questions a run is given back with, as the caller sees them. */
+  async function shownAll(
+    agent: AnyAgent,
+    caller: Caller,
+    interrupts: readonly Interrupt[],
+  ): Promise<Interrupt[]> {
+    const out: Interrupt[] = [];
+    for (const interrupt of interrupts)
+      out.push(await shown(agent, caller, interrupt));
+    return out;
+  }
+
   async function outcomeOf(
     agent: AnyAgent,
     caller: Caller,
@@ -382,21 +402,26 @@ export function createServer({
     try {
       const outcome = await running;
       if (outcome.status === "done") return outcome;
-      const interrupts: Interrupt[] = [];
-      for (const interrupt of outcome.interrupts)
-        interrupts.push(await shown(agent, caller, interrupt));
-      return { status: "interrupted", interrupts };
+      return {
+        status: "interrupted",
+        interrupts: await shownAll(agent, caller, outcome.interrupts),
+      };
     } catch (error) {
       if (error instanceof RunFailed) {
         return {
           status: "failed",
           error: { code: error.reason, message: error.message },
+          ...(error.interrupts.length === 0
+            ? {}
+            : {
+                interrupts: await shownAll(agent, caller, error.interrupts),
+              }),
         };
       }
       if (signal?.aborted) {
         return {
           status: "failed",
-          error: { code: "aborted", message: "the client stopped the run" },
+          error: { code: "stopped", message: "the client stopped the run" },
         };
       }
       throw error;
@@ -431,9 +456,7 @@ export function createServer({
     caller: Caller,
     kept: Kept,
   ): Promise<ConversationInfo> {
-    const interrupts: Interrupt[] = [];
-    for (const interrupt of kept.interrupts)
-      interrupts.push(await shown(agent, caller, interrupt));
+    const interrupts = await shownAll(agent, caller, kept.interrupts);
     return {
       conversation: kept.conversation,
       agent: kept.agent,
@@ -596,6 +619,19 @@ export function createServer({
         const { caller, agent } = await readable(request, key);
         return shown(agent, caller, interrupt);
       },
+      onError,
+    }),
+  );
+  app.route(
+    "/mcp",
+    mcpRoutes({
+      callerOf,
+      agentsFor: async (caller) => agentsFor(caller),
+      // Nobody can answer a question inside an MCP call: its runs are unattended.
+      start: (request, agent, run, control) =>
+        start(request, agent, run, control, false),
+      connectUrl: async (caller, connection) =>
+        connectUrl?.({ connection, caller }),
       onError,
     }),
   );

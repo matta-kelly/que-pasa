@@ -245,7 +245,10 @@ export type RunOptions<C extends Json | undefined> = {
    * the question when a call asks one. Its first start decides; the same run id again keeps it.
    */
   attended?: boolean;
-  /** Stops the run: run() rejects with the signal's reason, and no tool or model call starts after it. */
+  /**
+   * Stops the run, as `stop` does: kept as `stopped`, with the runs it stops, then aborted, so no tool or model call
+   * starts after it. run() rejects with the signal's reason.
+   */
   signal?: AbortSignal;
   /**
    * Called once the run is admitted, or found admitted already, and its answers kept: after this, run() gives its outcome
@@ -727,7 +730,13 @@ export async function openRuntime({
     // A run that waits on a question has not ended: what is given at its end waits for it.
     let waits = false;
     try {
-      const followed = await follow(submission, conversation, signal);
+      const followed = await follow(
+        submission,
+        conversation,
+        key,
+        runId,
+        signal,
+      );
       if (followed.interrupts) {
         waits = true;
         return { status: "interrupted", interrupts: followed.interrupts };
@@ -804,11 +813,13 @@ export async function openRuntime({
 
   /**
    * Follow a run until it settles, or waits on questions someone can answer. On abort, pi cancels only the wait and
-   * never the work, so the conversation is aborted too: its tasks stop, and the run rejects with the signal's reason.
+   * never the work, so the run is stopped, as `stop` stops it: kept, then aborted. It rejects with the signal's reason.
    */
   async function follow(
     submission: Submission,
     conversation: Conversation,
+    key: string,
+    runId: string,
     signal: AbortSignal | undefined,
   ): Promise<
     | { settled: SettledSubmissionRecord; interrupts?: never }
@@ -830,7 +841,7 @@ export async function openRuntime({
       return await Promise.race([settled, paused]);
     } catch (error) {
       if (!signal?.aborted) throw error;
-      await conversation.abort(context);
+      await stop(key, runId);
       throw signal.reason;
     } finally {
       cancel();

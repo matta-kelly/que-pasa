@@ -1,6 +1,6 @@
 ---
 type: component
-description: "que-pasa's server: a deployment's agents, reached from outside its process, after LangGraph's Agent Server. Read for what a server does, the questions it asks the deployment, its HTTP API and its operations, how it answers a refusal, a long run and a run that asks a person, how a client reads its conversations and runs and stops one, and where it differs from LangGraph. Its chat surface, for a browser chat on the AI SDK, is que-pasa-chat."
+description: "que-pasa's server: a deployment's agents, reached from outside its process, after LangGraph's Agent Server. Read for what a server does, the questions it asks the deployment, its HTTP API and its operations, how it answers a refusal, a long run and a run that asks a person, how a client reads its conversations and runs and stops one, and where it differs from LangGraph. Its surfaces on the same runs: que-pasa-chat, for a browser chat on the AI SDK, and que-pasa-mcp, for an MCP client."
 status: running
 ---
 A deployment's agents, reached from outside its process: one agent, from any way in. The code is `server/`, exported as `@mku1tra/que-pasa/server`, after LangGraph's Agent Server; `define/` and `loop/` never import it.
@@ -13,6 +13,7 @@ A deployment's agents, reached from outside its process: one agent, from any way
 - [[que-pasa]]: the harness it is part of
 - [[que-pasa-loop]]: the runs it starts, on a conversation, by a run id
 - [[que-pasa-chat]]: its chat surface, the AI SDK's chat protocol on the same runs, for a chat in a browser
+- [[que-pasa-mcp]]: its MCP surface, the Model Context Protocol on the same runs, for an MCP client
 
 ---
 ## The server
@@ -25,11 +26,12 @@ A process on the network that starts runs for whoever calls: for each request it
 	- what context a conversation is made with: `contextFor({ caller, agent, conversation, request })`, none when left out. A request never sets the context; a deployment that lets a client ask for something reads the request in this hook, and throws `Refused` (403) for what it does not allow
 	- which login a tool acts with: `credentialFor`, given to the runtime ([[define-tool#Reaching an outside system]]); and where a person connects one: `connectUrl({ connection, caller })`, the deployment's page, given with a run's question for a login
 - the model is the agent's
-- its runs are attended: a person is at the other end, so a tool call that asks waits for them, and the run gives back its questions ([[que-pasa-loop#The interrupt]])
+- its runs are attended: a person is at the other end, so a tool call that asks waits for them, and the run gives back its questions ([[que-pasa-loop#The interrupt]]). MCP's are not, as nobody can answer inside an MCP call: a question fails the call with what is needed ([[que-pasa-mcp#A call as a run]])
 - what each part owns:
 	- que-pasa: the routes, the checks, the run, the answer
-	- the deployment: its answers, its way in (such as L&L's MCP layer, beside the server's routes), and serving `fetch` on its box (`@hono/node-server`, a Worker)
-- one agent from every way in: Slack, MCP, a phone or an app all become the same call (this caller, this agent, this conversation, this input), so the agent and its tools act the same whichever way it was reached
+	- que-pasa's surfaces, on the same runs and checks: the chat ([[que-pasa-chat]]) and MCP ([[que-pasa-mcp]])
+	- the deployment: its answers, which of the server's paths it exposes, a way in of its own in the same process (such as a Slack app, on the operations), and serving `fetch` on its box (`@hono/node-server`, a Worker)
+- one agent from every way in: a chat, MCP, Slack, a phone or an app all become the same call (this caller, this agent, this conversation, this input), so the agent and its tools act the same whichever way it was reached
 
 ## The HTTP API
 
@@ -47,6 +49,7 @@ A process on the network that starts runs for whoever calls: for each request it
 | `GET /conversations/{conversation}/runs/{runId}` | `GET /threads/{id}/runs/{run_id}` | how the run stands |
 | `POST /conversations/{conversation}/runs/{runId}/cancel` | `POST /threads/{id}/runs/{run_id}/cancel` | `{ stopped }`: the run stopped, or false when it had ended ([[que-pasa-loop#Conversation and run]]) |
 | `/chat`, its routes | (the AI SDK's) | the chat surface ([[que-pasa-chat]]) |
+| `POST /mcp` | `POST /mcp` | the MCP surface ([[que-pasa-mcp]]) |
 
 - `conversation`: the client's key, any non-empty string, URL-encoded in the path. `runId`: the client's, so the same one again is the same run and gives back its outcome. `input`: one text message, as every agent takes
 - `whenBusy`: what the input does when a run goes on, or waits, on the conversation, pi's ([[que-pasa-loop#Conversation and run]]): `reject`, the default, answers 422 `busy`; `followUp` queues it, and answers its own outcome once the runs before it end; `steer` joins it to the run going on, and answers that run's outcome. LangGraph's `multitask_strategy`: `reject` is its default, `enqueue` is `followUp`, and it has no steer
@@ -69,7 +72,7 @@ A process on the network that starts runs for whoever calls: for each request it
 
 - once admitted: 200 at once, a newline each second while the run goes on, then `{ conversation, runId, status, ... }`. Leading newlines are valid JSON, and keep a proxy, such as Cloudflare's 100-second limit, from cutting a long run (LangGraph's `waitKeepAlive`)
 	- `status: "done"`, with `result`: the agent's text, or its output
-	- `status: "failed"`, with `error: { code, message }`: `no_submit`, `stopped` for a run a person stopped, or pi's reason
+	- `status: "failed"`, with `error: { code, message }`: `no_submit`, `stopped` for a run a person or its client stopped, or pi's reason; a run nobody attends, MCP's, also with the `interrupts` it stopped on
 	- `status: "interrupted"`, with `interrupts: [{ id, callId, value, error? }]`: the run waits on these questions, LangGraph's `__interrupt__`, each on the tool call `callId`. `value` is what the asker asked:
 		- a login: `{ type: "connection", name, description, owner, connectUrl }`, with the deployment's page, answered as an approval: `{ type: "approve" }` once connected, which checks again, or `{ type: "reject", message? }`, not connecting it
 		- an approval: `{ type: "tool_approval", name, args, description, allowedDecisions }`, answered with a decision ([[que-pasa-middleware#Approval]])
@@ -93,11 +96,11 @@ What a client reads to show its conversations, such as a chat's list and a page 
 
 ## The operations
 
-The same, for a way in in the same process, such as an MCP layer: each answers the deployment's questions from the request first, as the routes do.
+The same, for a way in in the same process, such as a Slack app: each answers the deployment's questions from the request first, as the routes do.
 - `agents(request)`: the caller's agents, as `{ name, description }`
 - `run(request, agent, { conversation, runId, input, whenBusy } | { conversation, runId, resume }, { signal, onKeepAlive })`: the run's outcome, `{ status: "done", result }`, `{ status: "failed", error }` or `{ status: "interrupted", interrupts }`
-	- `signal`: stops the run when it aborts, which then ends `failed` with `aborted`. Left out, the run goes on whatever the client does
-	- `onKeepAlive`: called each second while the run goes on, for a client that must show it is alive, such as an MCP progress notification
+	- `signal`: stops the run when it aborts, as `stop` does: it ends `failed` with `stopped`, and the run reads `stopped`. Left out, the run goes on whatever the client does
+	- `onKeepAlive`: called each second while the run goes on, for a client that must show it is alive, such as a progress bar
 - `conversations(request, { agent, limit, cursor })`, `conversation(request, conversation)`, `entries(request, conversation, { order, minEntryId, maxEntryId, limit, cursor })`, `runs(request, conversation, { limit, cursor })` and `runOf(request, conversation, runId)`: the reads, with pi's cursor as JSON, not as text
 - `stop(request, conversation, runId)`: the cancel, `{ stopped }`
 - a refusal throws `ServerError`, with the route's status and code
