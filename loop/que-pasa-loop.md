@@ -37,7 +37,13 @@ while True:
     log.append(action, result)
 ```
 
-- durable execution: a log kept so that a run goes on from where it stopped. Approval gates and idempotency are not two items but this one pillar: an approval gate is durability holding state while a person decides, and idempotency is what durability needs to replay safely
+- durable execution: a log kept so that a run goes on from where it stopped. Approval gates and idempotency are not two more pillars but what this one needs
+	- approval gate: durability holding state while a person decides ([[#The interrupt]])
+	- idempotency: what durability needs to replay safely: a request has its effect once, however often it is sent again or a crash cuts it off. Held at three layers, each by its own key, each relying only on the layer below it
+		- the surface ([[que-pasa-server]], [[que-pasa-chat]]): the same request is the same run, by the run id its client gives, so a message sent again, or a stream taken up again, is never a second run
+		- the loop: a run finishes once, by its steps in pi's log: a finished step is never done again, and a tool call a crash cut off runs again only if its tool is replay-safe; otherwise the model is told it was interrupted
+		- the tool ([[define-tool]]): its effect in the world happens once, by each item's own key, such as an order's number: it writes by the key, skipping what is there, so it is replay-safe, and reports each item, so the model retries only what failed
+		- so ten orders to upload, cut off after three at any layer, end as ten orders, none twice: the surface takes up the same run, the loop runs the tool again, and the tool skips the three
 - in que-pasa the log is pi-durable's conversation, kept in the host's storage, and each run adds to it. `build` is the agent's instructions, its tools, and what its middleware adds to the system prompt; `run` is its tools and the resources the host gives them
 
 ## Conversation and run

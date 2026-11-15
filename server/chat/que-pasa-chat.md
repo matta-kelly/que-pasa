@@ -57,4 +57,5 @@ The AI SDK's UI message stream, written with `ai`'s own `createUIMessageStream` 
 - from the AI SDK's own servers: the server keeps the conversation, in pi, and takes only the last message; the AI SDK's examples rebuild it from the messages the client sends, and sign approvals to trust them
 - from the AI SDK's resumable streams: no Redis and no stored stream; a stream is rebuilt from pi's entries and live state, so a reconnect needs nothing the run does not keep anyway
 - from the AI SDK's `stop()`: a stop is a run's, by its id, kept before pi aborts it, so a stop that comes late never stops a newer run
+- from LangGraph's Agent Server: no CORS. A browser app on another origin reaches the server through a proxy of its own, which calls it as the deployment's sign-in allows, such as with an Access token
 - not built: files in a message (an agent's input is text), regenerating a message, and an agent's output as a typed part (it is the `submit` call's result)

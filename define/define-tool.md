@@ -22,7 +22,7 @@ A tool is a name, a description, the input it takes and what it does; it gets wh
 	- schema: the input the model must give, a zod object
 	- `run(input, runtime)`: what it does
 	- uses: the resources it asks its run for, if any (see [[#Reaching an outside system]])
-	- `replay: "safe"`: a call a crash cut off may run again (see [[#How a run calls it]])
+	- `replay: "safe"`: a call a crash cut off may run again, as running it again changes nothing more: it only reads, or writes each item by the item's own key, such as an order's number, skipping what is there (see [[#How a run calls it]], [[que-pasa-loop#The idea]])
 - what it gets from a run: `runtime.caller`, who the run acts for, `runtime.context`, the JSON the host gave the run, `runtime.use(resource)`, the run's value of a resource it uses, and `runtime.signal`, aborted when the call is
 	- the caller and the context come from the run's document, never from the tool's arguments, so the model cannot say whom it acts for
 	- the signal: aborted when a person stops the run, or the host closes. A tool that waits on something long passes it on, as LangChain's `config.signal`; the call ends at the abort whatever the tool does, so a stop never waits on a tool
@@ -62,6 +62,7 @@ A tool that changes data can need a person's yes before it runs: `humanInTheLoop
 The loop gives each tool to pi as a pi tool, and pi records each call in the run's log.
 - pi checks the model's arguments against the tool's JSON Schema (the input shape, so a field with a default is optional); zod parses them; `run` gets the runtime
 - what it gives back goes to the model as text: a string as it is, anything else as JSON. A tool that throws gives the model an error result
+	- a tool that acts on many items gives each item's outcome, never one error for all, so after a partial failure the model retries only what failed
 - around its code: the check of its connections, then the agent's middleware, outermost first ([[que-pasa-middleware]]); any of them may ask a person first, and the call waits
 - after a crash
 	- a call that had not started its tool's code runs again: a question it asked is found, and it waits again, or goes on with the answer
