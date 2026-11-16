@@ -1,117 +1,73 @@
 # que-pasa
 
-que-v2's harness, on pi-durable: a workspace defines its agents with `@mku1tra/que-pasa/define`, and `@mku1tra/que-pasa/loop` runs them, durably and traced. It knows no workspace. What is built: `que-pasa.md`.
+[![npm](https://img.shields.io/npm/v/@mku1tra/que-pasa)](https://www.npmjs.com/package/@mku1tra/que-pasa) [![license](https://img.shields.io/npm/l/@mku1tra/que-pasa)](LICENSE)
 
-## Run and check
+A durable agent harness for TypeScript. Define agents and tools once; que-pasa runs them so they survive crashes, wait for people, and are traced, and serves them to chat apps, MCP clients and your own code.
 
-Node runs in this checkout's workspace, never on the host. crate (github.com/matta-kelly/crate) makes the workspace from `crate.toml`: its tools member runs the dev image, `ghcr.io/matta-kelly/que-pasa-dev:<hash>`, which `.crate/Containerfile` builds with the npm cache of `package-lock.json`, and the `dev-image` workflow on main builds and pushes it. You need `just`, `podman` and crate; once per machine, log in with `podman login ghcr.io`, and the first `just up` pulls the dev image, then installs from its cache in seconds.
+It follows LangChain's model (agents, tools, middleware, LangGraph's threads and runs) and runs on [pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable), which keeps every step of a run in storage.
 
-- `just up`: make or start this checkout's workspace
-- `just check`: the check set, `scripts/check.sh`: notes, then types, lint, format, tests and the build. crate's merge queue runs the same file
-- `just run <command>`: run a command in the workspace, such as `just run npm install zod`
-- `just down`: remove this checkout's workspace: its containers, volumes and network
+## Features
 
-## Run agents
+- **Durable runs**: a run killed mid-step goes on from where it stopped when its process starts again. The same run id is always the same run, so a retry never runs twice.
+- **Conversations**: history across runs, with follow-ups queued or steered into the run going on, and a stop that holds.
+- **Human in the loop**: a tool call can stop for a person's approval, or for a login, and go on once answered.
+- **Tools that reach the world safely**: per-person logins through connections, so a tool gets a client and never a credential, and sandboxed file and shell tools (local or Podman).
+- **Middleware**: memory files, skills, and approvals, after LangChain's.
+- **Three ways in, on the same runs**: an HTTP API after LangGraph's Agent Server, the Vercel AI SDK's chat protocol, and MCP.
+- **Tracing**: OpenTelemetry GenAI spans for every run, model request and tool call.
+
+## Install
+
+```sh
+npm install @mku1tra/que-pasa zod
+```
+
+## Quick start
 
 ```ts
+import { createModels } from "@earendil-works/pi-ai";
+import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { defineAgent, defineTool } from "@mku1tra/que-pasa/define";
 import { openRuntime } from "@mku1tra/que-pasa/loop";
+import { z } from "zod";
 
-const runtime = await openRuntime({ storage: await openNodeSqliteStorage("runs.sqlite"), models, agents: [nail] });
-const first = await runtime.run(nail, input, { conversation: "cl-42/coder", runId: "1", caller: { id: "assembly" }, context });
-const second = await runtime.run(nail, review, { conversation: "cl-42/coder", runId: "2", caller: { id: "assembly" }, context });
-await runtime.close();
-// first: { status: "done", result } or { status: "interrupted", interrupts }
-```
-
-A conversation keeps its history across runs: the second run's model has the first's messages. Each run is one input to its own result, usage and trace; a conversation takes one run at a time, and every run on it gives the same agent, caller and context. An input while a run goes on is refused by default; `whenBusy: "followUp"` queues it to run after, and `whenBusy: "steer"` joins it to the run going on, at its next step (pi's `whenBusy`). A host reads what it keeps: `runtime.conversations(caller)` lists a caller's conversations, newest first; `runtime.conversation(key)` says how one stands (`idle`, `busy`, `interrupted` with its questions, or `error`); `runtime.entries(key, query, limit)` pages its entries, pi's transcript records, without the system prompt; `runtime.runs(key)` lists its runs, and `runtime.watch(key)` follows it as it changes. `runtime.stop(key, runId)` stops a run as a person asks: at once, with what is queued behind it.
-
-A tool call can stop to ask a person, as LangGraph's `interrupt()`. A run someone attends (`attended: true`) then gives back `interrupted`, with its questions, and goes on at that call once answered, as LangGraph's `Command(resume)`; a run nobody attends, the default, fails with the question before the tool acts:
-
-```ts
-import { humanInTheLoop } from "@mku1tra/que-pasa/middleware";
-
-const seller = defineAgent({ name: "seller", model, instructions, tools, middleware: [humanInTheLoop({ interruptOn: { send_quote: true } })] });
-const asked = await runtime.run(seller, "Quote acme.", { conversation, runId: "1", caller, attended: true });
-// asked.interrupts[0]: { id, value: { type: "tool_approval", name: "send_quote", args, description, allowedDecisions } }
-const done = await runtime.run(seller, { resume: { [asked.interrupts[0].id]: { type: "approve" } } }, { conversation, runId: "1", caller });
-```
-
-One runtime per process owns its SQLite file. After a crash, open it again with the same agents: unfinished runs go on, and `run` with the same `runId` gives back the result.
-
-A tool gets what it acts on from its conversation, as a resource the host provides. The file and command tools of `@mku1tra/que-pasa/sandbox` act in the `Sandbox` the host gives each conversation:
-
-```ts
-import { provide } from "@mku1tra/que-pasa/loop";
-import { Sandbox, execute, fileTools, podman, view } from "@mku1tra/que-pasa/sandbox";
-
-const coder = defineAgent({ name: "coder", model, instructions, tools: [...fileTools, execute] });
-const runtime = await openRuntime({
-  storage, models, agents: [coder],
-  resources: [
-    provide(Sandbox, ({ conversation }) =>
-      podman({ name: `box-${conversation.replaceAll("/", "-")}`, image: "node:22", mounts: [{ source: worktree, target: "/work" }] }),
-    ),
-  ],
+const findOrder = defineTool({
+  name: "find_order",
+  description: "Find an order by its number.",
+  schema: z.object({ number: z.string() }),
+  run: async ({ number }) => orders.get(number),
 });
-```
 
-A provider resolves from the conversation as its first run made it, so every run on it, also one that resumes after a crash, gets the same sandbox. `view(backend, { read, write })` limits a conversation to some files. What each backend's wall stops: `sandbox/que-pasa-sandbox.md`.
-
-An agent's middleware are optional behaviours on its loop. `memory` gives an agent files it always has in its context, loaded once when the conversation is made and kept in it, so every run on it, also one that resumes, has the same memory:
-
-```ts
-import { memory } from "@mku1tra/que-pasa/middleware";
-import { local } from "@mku1tra/que-pasa/sandbox";
-
-const reviewer = defineAgent({
-  name: "reviewer", model, instructions, tools,
-  middleware: [memory({ backend: local({ root: workspace }), sources: ["memory/craft.md"] })],
+const support = defineAgent({
+  name: "support",
+  model: "anthropic:claude-sonnet-5-5",
+  instructions: "Answer questions about orders.",
+  tools: [findOrder],
 });
-```
 
-`skills` gives an agent folders of know-how: it sees each skill's name and description, and reads a skill's `SKILL.md` with `read_file` when a task matches. An agent with no file tools gets a read-only `read_file` over the skill folders:
-
-```ts
-import { skills } from "@mku1tra/que-pasa/middleware";
-
-const seller = defineAgent({
-  name: "seller", model, instructions, tools,
-  middleware: [skills({ backend: local({ root: workspace }), sources: ["skills"] })], // skills/<skill>/SKILL.md
-});
-```
-
-What middleware is, and how memory, skills and approval work: `middleware/que-pasa-middleware.md`.
-
-A tool reaches an outside service through a connection: the workspace says what it is and whose login it uses, and the deployment hands over the logins from its control plane. A tool gets the connection, never the login. A call that needs a login the caller has not given asks them to connect it, in a run someone attends; a run nobody attends is refused at its start:
-
-```ts
-import { defineConnection, defineTool } from "@mku1tra/que-pasa/define";
-
-const odoo = defineConnection({
-  name: "odoo", owner: "user",                       // each person's own login; "shared" for one login
-  credential: z.object({ url: z.string(), db: z.string(), apiKey: z.string() }),
-  connect: (login) => odooClient(login),             // what tools act through
-  whoami: (client) => client.me(),                   // optional: { id, name, email }, so "my" means something
-});
-const readPartners = defineTool({
-  name: "read_partners", description, schema, uses: [odoo],
-  run: async (input, runtime) => (await runtime.use(odoo)).search("res.partner", input),
-});
+const models = createModels();
+models.setProvider(anthropicProvider()); // reads ANTHROPIC_API_KEY
 
 const runtime = await openRuntime({
-  storage, models, agents,
-  credentialFor: ({ connection, caller }) => controlPlane.login(connection.name, caller.id), // undefined: none
+  storage: await openNodeSqliteStorage("runs.sqlite"),
+  models,
+  agents: [support],
 });
+
+const outcome = await runtime.run(support, "Where is order 1042?", {
+  conversation: "customer-7",
+  runId: "1",
+  caller: { id: "customer-7" },
+});
+// { status: "done", result: "Order 1042 shipped on ..." }
 ```
 
-How connections work: `define/define-tool.md`.
-
-Each run is traced as OpenTelemetry GenAI spans through `@opentelemetry/api`. To keep them, register an SDK (a tracer provider, an exporter, and an async context manager). To add what only the host knows, call `runtime.run()` inside a span of its own. `captureContent: true` on `openRuntime` adds message content.
+Run `runtime.run` again with the same `runId`, in this process or one started after a crash, and it gives back the same result without running again.
 
 ## Serve agents
 
-`@mku1tra/que-pasa/server` reaches a deployment's agents from outside its process. The deployment opens the runtime and answers who is calling, which agents they get, and what context a conversation has:
+`createServer` puts a deployment's agents on the network. The deployment answers who is calling and which agents they get:
 
 ```ts
 import { serve } from "@hono/node-server";
@@ -119,53 +75,63 @@ import { createServer } from "@mku1tra/que-pasa/server";
 
 const server = createServer({
   runtime,
-  authenticate: async (request) => callerFromLogin(request), // undefined refuses (401)
+  authenticate: (request) => callerOf(request), // undefined answers 401
   agentsFor: (caller) => agentsOf(caller),
-  contextFor: ({ caller, agent, conversation }) => undefined, // optional
 });
 serve({ fetch: server.fetch, port: 8080 });
 ```
 
-It answers `GET /ok`, `GET /agents`, and `POST /conversations/{conversation}/runs/wait` with `{ agent, runId, input }`, or `{ agent, runId, command: { resume } }` to answer a run's questions, after LangGraph's Agent Server. A client reads its history with `GET /conversations` (its conversations, newest first), `GET /conversations/{conversation}` (how one stands: its status, the run going on and the questions it waits on) and `GET /conversations/{conversation}/entries` (pi's transcript records, a page at a time). `GET /conversations/{conversation}/runs` lists its runs, and `POST /conversations/{conversation}/runs/{runId}/cancel` stops one. A way in in the same process, such as a Slack app, calls `server.agents(request)` and `server.run(request, agent, { conversation, runId, input })`, or `{ conversation, runId, resume }`, and `server.conversations`, `server.conversation`, `server.entries`, `server.runs`, `server.runOf` and `server.stop`. Its runs are attended: a run that asks gives back `interrupted`, with its questions. The routes, the refusals and a long run: `server/que-pasa-server.md`.
+Every way in shares the same runs, conversations and checks:
 
-A chat in a browser uses the server's chat surface, the AI SDK's chat protocol at `/chat`: `useChat` streams a run's answer as it is written, its tool calls and its approvals, and resumes the stream after a reload, with no glue:
+| Way in | For | Path |
+|---|---|---|
+| HTTP API | scripts, services, other agents | `/agents`, `/conversations`, `/conversations/{id}/runs/wait`, after LangGraph's Agent Server |
+| Chat | a browser chat on `useChat`, assistant-ui or AI Elements: streaming, approvals, resume after reload, stop | `/chat` |
+| MCP | Claude Code, IDEs and other MCP clients: each agent is a tool | `/mcp` |
+
+A React chat needs only the endpoint:
 
 ```tsx
-const { messages, sendMessage, addToolApprovalResponse } = useChat<ChatMessage>({
-  id: conversation,
-  messages: history, // GET /chat/{conversation}/messages
-  resume: true,
-  transport: new DefaultChatTransport({ api: "/chat", body: { agent: "seller" } }),
+const chat = useChat<ChatMessage>({
+  transport: new DefaultChatTransport({ api: "/chat", body: { agent: "support" } }),
   sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses,
 });
 ```
 
-A stop button posts `{ runId }` to `/chat/{conversation}/stop`. How a run becomes messages, and how the stream follows it: `server/chat/que-pasa-chat.md`.
+## Packages
 
-An MCP client uses the server's MCP surface at `/mcp`: each agent the caller is given is a tool that takes `{ input }`, and a call is one run, kept in the caller's history. Nobody can answer a question inside an MCP call, so a run that would ask a person stops before that step and the call says what is needed, such as where to connect a login. In Claude Code's `.mcp.json`, with the header the deployment's sign-in reads:
+| Import | What it holds |
+|---|---|
+| `@mku1tra/que-pasa/define` | `defineAgent`, `defineTool`, `defineConnection`, `defineResource` |
+| `@mku1tra/que-pasa/loop` | `openRuntime`: runs, conversations, stops, reads |
+| `@mku1tra/que-pasa/middleware` | `memory`, `skills`, `humanInTheLoop` |
+| `@mku1tra/que-pasa/sandbox` | file and shell tools, local and Podman backends, views |
+| `@mku1tra/que-pasa/server` | `createServer`: the HTTP API, chat and MCP |
 
-```json
-{
-  "mcpServers": {
-    "agents": {
-      "type": "http",
-      "url": "https://agents.example.com/mcp",
-      "headers": { "Authorization": "Bearer ${AGENTS_TOKEN}" }
-    }
-  }
-}
+## Documentation
+
+The design notes live beside the code:
+
+- [Overview](que-pasa.md): what que-pasa is, and how its parts fit
+- [The loop](loop/que-pasa-loop.md): conversations, runs, interrupts, crash recovery, and the invariants each test holds
+- [Tools](define/define-tool.md): resources, connections and logins, approvals
+- [Middleware](middleware/que-pasa-middleware.md): memory, skills, approvals
+- [Sandbox](sandbox/que-pasa-sandbox.md): backends, and what each one's wall stops
+- [Server](server/que-pasa-server.md): the HTTP API, refusals, long runs
+- [Chat](server/chat/que-pasa-chat.md) and [MCP](server/mcp/que-pasa-mcp.md): the two surfaces
+
+## Development
+
+The toolchain runs in a container made by [crate](https://github.com/matta-kelly/crate), so the host needs only `just`, `podman` and crate.
+
+```sh
+just up      # make or start the workspace
+just check   # notes, types, lint, format, tests, build, and the packed exports
+just run npm install <package>
 ```
 
-How a call becomes a run, and what it gives back: `server/mcp/que-pasa-mcp.md`.
+Changes land on `main` through a merge queue that runs `just check`. Versions follow Conventional Commits: a version tag is made from the commit types, and CI publishes it to npm with provenance.
 
-## Use it from another project
+## License
 
-Install it from npm: `npm install @mku1tra/que-pasa zod`. zod is a peer dependency: the project brings it.
-
-## Release
-
-A land is a version when its commits ask for one: crate reads their types (Conventional Commits) on the server, tags main `v<version>`, and copies the tag to GitHub ([crate](https://github.com/matta-kelly/crate#release)). While que-pasa is at 0.x, a breaking change bumps minor, and `feat`, `fix` and `perf` bump patch. `.github/workflows/publish.yml` runs the check set, sets `package.json`'s version from the tag, and publishes on npm by trusted publishing (no token, with provenance). `package.json`'s version in git is not kept: the tag is the version. A ruleset lets only crate's deploy key, or an admin of the repo, make a version tag. A version npm has is not published again. A published version cannot change: npm unpublishes only within 72 hours.
-
-## Ship
-
-A change lands on main through `git land`.
+[MIT](LICENSE)
