@@ -109,10 +109,14 @@ What a client reads of its conversations, as LangGraph's thread search, thread, 
 	- held by the caller index: a session document per caller id, its conversations in the order they were made, appended in the commit that makes each, so a page reads the caller's and no other's
 	- `agents`: only those of these agents; `limit`: 20 when left out; `cursor`: the page before's `next`
 - `runtime.conversation(key)`: how it stands, LangGraph's thread: what its first run made it with (agent, caller, context), and
+	- `title`: what a client lists it by: its first input, its words with single spaces between, cut at the last space within 80 characters with "…", in the commit that makes it; or what `update` gave. A model's title is the deployment's, written with `update`: que-pasa calls no model for one
+	- `createdAt`: when it was made, ISO 8601, from the clock at the commit that makes it, as pi keeps no clock on a conversation
+	- `lastMessageAt`: when its newest message was written, ISO 8601, from pi's message timestamps (an answer's is when its request started); `createdAt` while it has none
 	- `status`: `busy` while pi's run goes on, `interrupted` while it waits on questions someone can answer (the rule `run()` gives `interrupted` by), `error` when idle and pi keeps `runFailure` (its newest run ended with no answer), `idle` otherwise
 	- `runId`: the run going on, when busy or interrupted: answers go on it, as `{ resume }`
 	- `interrupts`: the questions it waits on, when interrupted
 	- `runFailure`: pi's reason and detail, when `error`
+- `runtime.update(key, { title })`: renames it, LangGraph's thread update: a title of 1 to 200 characters once trimmed, or a `RangeError`. Gives how it now stands
 - `runtime.entries(key, query, limit, cursor)`: a page of its entries, pi's transcript records, as pi's `conversation.entries()` gives them: `query` is pi's `EntryQuery` (`order`, newest first by default; `minEntryId`, `maxEntryId`)
 	- without the system entries: the instructions and tool definitions are the deployment's. A client sees the messages, as `onMessages` gives them
 	- a page is filled to `limit` while the scan has more, and `next` is pi's cursor, set only while it does: so pi's `ConversationTranscript`, which pages by entry ids and ends on no `next`, pages it as it pages pi's own

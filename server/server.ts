@@ -192,6 +192,12 @@ export type Server = {
     request: Request,
     conversation: string,
   ) => Promise<ConversationInfo>;
+  /** Change what one of the caller's conversations is listed by, as LangGraph's thread PATCH: its title. */
+  update: (
+    request: Request,
+    conversation: string,
+    change: { title: string },
+  ) => Promise<ConversationInfo>;
   /** A page of one of the caller's conversation's runs, LangGraph's runs of a thread, the newest admitted first. */
   runs: (
     request: Request,
@@ -235,6 +241,9 @@ const ConversationsParams = z.strictObject({
   limit: Limit,
   cursor: CursorParam,
 });
+
+/** A conversation's change: its title, as LangGraph's thread PATCH changes a thread. */
+const UpdateBody = z.strictObject({ title: z.string() });
 
 /** The query string of the runs route. */
 const RunsParams = z.strictObject({ limit: Limit, cursor: CursorParam });
@@ -460,6 +469,9 @@ export function createServer({
     return {
       conversation: kept.conversation,
       agent: kept.agent,
+      title: kept.title,
+      createdAt: kept.createdAt,
+      lastMessageAt: kept.lastMessageAt,
       status: kept.status,
       ...(kept.runId === undefined ? {} : { runId: kept.runId }),
       interrupts,
@@ -505,6 +517,25 @@ export function createServer({
   async function conversation(request: Request, key: string) {
     const { caller, agent, kept } = await readable(request, key);
     return infoOut(agent, caller, kept);
+  }
+
+  async function update(
+    request: Request,
+    key: string,
+    { title }: { title: string },
+  ) {
+    const { caller, agent } = await readable(request, key);
+    let changed: Kept | undefined;
+    try {
+      changed = await runtime.update(key, { title });
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      throw new ServerError(400, "bad_request", error.message, {
+        cause: error,
+      });
+    }
+    // Readable, so made: a conversation is never removed.
+    return infoOut(agent, caller, changed!);
   }
 
   async function entries(
@@ -584,6 +615,16 @@ export function createServer({
   app.get("/conversations/:conversation", async (c) =>
     c.json(await conversation(c.req.raw, c.req.param("conversation"))),
   );
+  app.patch("/conversations/:conversation", async (c) => {
+    const body = UpdateBody.safeParse(
+      await c.req.json().catch(() => undefined),
+    );
+    if (!body.success)
+      throw new ServerError(400, "bad_request", z.prettifyError(body.error));
+    return c.json(
+      await update(c.req.raw, c.req.param("conversation"), body.data),
+    );
+  });
   app.get("/conversations/:conversation/runs", async (c) =>
     c.json(
       pageOut(
@@ -721,6 +762,7 @@ export function createServer({
       (await start(request, agent, run, control)).outcome,
     conversations,
     conversation,
+    update,
     entries,
     runs,
     runOf,

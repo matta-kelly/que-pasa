@@ -44,6 +44,7 @@ A process on the network that starts runs for whoever calls: for each request it
 | `POST /conversations/{conversation}/runs/wait`, body `{ agent, runId, input, whenBusy? }` or `{ agent, runId, command: { resume } }` | `POST /threads/{id}/runs/wait`, with `multitask_strategy` or `command.resume` | how the run stands |
 | `GET /conversations?agent=&limit=&cursor=` | `POST /threads/search` | `{ items: [conversation], next? }`: the caller's ([[#Reading conversations]]) |
 | `GET /conversations/{conversation}` | `GET /threads/{id}` | how the conversation stands |
+| `PATCH /conversations/{conversation}`, body `{ title }` | `PATCH /threads/{id}` | how it stands, renamed |
 | `GET /conversations/{conversation}/entries?order=&minEntryId=&maxEntryId=&limit=&cursor=` | `GET /threads/{id}/state`, its messages | `{ items: [entry], next? }` |
 | `GET /conversations/{conversation}/runs?limit=&cursor=` | `GET /threads/{id}/runs` | `{ items: [run], next? }`, the newest admitted first |
 | `GET /conversations/{conversation}/runs/{runId}` | `GET /threads/{id}/runs/{run_id}` | how the run stands |
@@ -58,7 +59,7 @@ A process on the network that starts runs for whoever calls: for each request it
 
 | Status | Code | When |
 |---|---|---|
-| 400 | `bad_request` | the body is not `{ agent, runId, input, whenBusy? }` or `{ agent, runId, command: { resume } }`; a read's query string has a field it does not take, a `limit` not 1 to 100, or a `cursor` that is not a page's `next` of the same query |
+| 400 | `bad_request` | the body is not `{ agent, runId, input, whenBusy? }` or `{ agent, runId, command: { resume } }`; a rename's body is not `{ title }` with 1 to 200 characters once trimmed; a read's query string has a field it does not take, a `limit` not 1 to 100, or a `cursor` that is not a page's `next` of the same query |
 | 401 | `unauthenticated` | `authenticate` gave no caller |
 | 403 | `forbidden` | a hook threw `Refused` |
 | 404 | `agent_not_found` | an agent not given to the caller, or none of that name |
@@ -83,7 +84,8 @@ A process on the network that starts runs for whoever calls: for each request it
 ## Reading conversations
 
 What a client reads to show its conversations, such as a chat's list and a page it loads again, as LangGraph's threads: the runtime's reads ([[que-pasa-loop#Reading a conversation]]), for the caller, of the agents the deployment gives them.
-- a conversation, as a client gets it: `{ conversation, agent, status, runId?, interrupts, runFailure? }`, LangGraph's thread. Its caller and context are the deployment's, and not given
+- a conversation, as a client gets it: `{ conversation, agent, title, createdAt, lastMessageAt, status, runId?, interrupts, runFailure? }`, LangGraph's thread. Its caller and context are the deployment's, and not given
+	- `title`, `createdAt` and `lastMessageAt`: what a list shows it by, when it was made, and when its newest message was written, ISO 8601 ([[que-pasa-loop#Reading a conversation]]). A rename sets the title, such as one a deployment's model writes
 	- `status`: `idle`, `busy`, `interrupted` or `error`, LangGraph's thread statuses
 	- `runId` and `interrupts`: the run going on, and, when interrupted, the questions it waits on, as a run gives them (a login question with the deployment's `connectUrl`). A page loaded again shows the questions, and answers them with `command: { resume }` on that `runId`
 	- `runFailure`: `{ reason, detail? }`, pi's, when `error`
@@ -101,6 +103,7 @@ The same, for a way in in the same process, such as a Slack app: each answers th
 - `run(request, agent, { conversation, runId, input, whenBusy } | { conversation, runId, resume }, { signal, onKeepAlive })`: the run's outcome, `{ status: "done", result }`, `{ status: "failed", error }` or `{ status: "interrupted", interrupts }`
 	- `signal`: stops the run when it aborts, as `stop` does: it ends `failed` with `stopped`, and the run reads `stopped`. Left out, the run goes on whatever the client does
 	- `onKeepAlive`: called each second while the run goes on, for a client that must show it is alive, such as a progress bar
+- `update(request, conversation, { title })`: the rename, how it now stands
 - `conversations(request, { agent, limit, cursor })`, `conversation(request, conversation)`, `entries(request, conversation, { order, minEntryId, maxEntryId, limit, cursor })`, `runs(request, conversation, { limit, cursor })` and `runOf(request, conversation, runId)`: the reads, with pi's cursor as JSON, not as text
 - `stop(request, conversation, runId)`: the cancel, `{ stopped }`
 - a refusal throws `ServerError`, with the route's status and code
@@ -113,5 +116,6 @@ The same, for a way in in the same process, such as a Slack app: each answers th
 - from LangGraph: a resume is the same run, by its `runId`, not a new run on the thread; new input while a run waits goes by its `whenBusy`, where LangGraph's new input drops the waiting question
 - from LangGraph: `steer` is pi's, with no LangGraph strategy; LangGraph's `interrupt` and `rollback`, which stop the run going on for the new input, are not built
 - from LangGraph: the list is the caller's, newest made first, with no search by metadata or values; a conversation's messages are pi's entries, paged, not the graph's state
+- from LangGraph: a conversation has a `title`, which a rename sets, and no metadata bag; LangGraph's thread has metadata, and its chat UI lists a thread by its first message
 - from LangGraph: a run streams through the chat surface, in the AI SDK's protocol, which chat frontends read, not LangGraph's `runs/stream`
 - not built: a run in the background with join, and crons: run life, each one more route

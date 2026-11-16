@@ -28,6 +28,10 @@ export type ConversationState = {
   caller: Caller;
   /** Absent when it was given none. */
   context?: Json;
+  /** What a client lists it by: its first input, cut short, or what a rename gave. */
+  title: string;
+  /** When it was made, ISO 8601: pi keeps no clock on a conversation. */
+  createdAt: string;
   /** Its runs' ids, in the order they were admitted. */
   runs: string[];
   /**
@@ -48,6 +52,8 @@ export const ConversationDoc = defineDoc<ConversationState>({
     conversation: "",
     agent: "",
     caller: { id: "" },
+    title: "",
+    createdAt: "",
     runs: [],
   }),
   checkpointWhen: () => true,

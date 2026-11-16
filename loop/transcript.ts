@@ -91,6 +91,32 @@ export async function entriesOf(
   return next === undefined ? { items } : { items, next };
 }
 
+/**
+ * When the conversation's newest message was written, in ms since the epoch, from pi's message timestamps: pi keeps no
+ * clock on an entry, only on the messages in it. Undefined while it has none.
+ */
+export async function lastMessageTime(
+  reader: Entries,
+  context: Context,
+): Promise<number | undefined> {
+  let cursor: Cursor | undefined;
+  do {
+    const page = await entriesOf(
+      reader,
+      { order: "descending" },
+      20,
+      cursor,
+      context,
+    );
+    for (const entry of page.items) {
+      const timestamp = entry.model?.at(-1)?.timestamp;
+      if (timestamp !== undefined) return timestamp;
+    }
+    cursor = page.next;
+  } while (cursor !== undefined);
+  return undefined;
+}
+
 /** The text of a user message. */
 export function userText(message: Message): string | undefined {
   return message.role === "user" ? userInputText(message.content) : undefined;

@@ -78,6 +78,7 @@ import { activeParent, createTracing } from "./trace.ts";
 import {
   answerText,
   entriesOf,
+  lastMessageTime,
   messagesOf,
   outcomeOf,
   userInputText,
@@ -127,6 +128,12 @@ export type ConversationInfo = {
   caller: Caller;
   /** Absent when it was made with none. */
   context?: Json;
+  /** What a client lists it by: its first input, cut short, or what a rename gave. */
+  title: string;
+  /** When it was made, ISO 8601. */
+  createdAt: string;
+  /** When its newest message was written, ISO 8601, from pi's message timestamps; `createdAt` while it has none. */
+  lastMessageAt: string;
   status: ConversationStatus;
   /** The run going on, when it is `busy` or `interrupted`: answers to its questions go on it, as `{ resume }`. */
   runId?: string;
@@ -318,6 +325,14 @@ export type Runtime = {
   /** One run of a conversation, and how it stands; undefined when it was never admitted. */
   runOf(key: string, runId: string): Promise<RunInfo | undefined>;
   /**
+   * Change what a client lists a conversation by, as LangGraph's thread update: its title, 1 to 200 characters once
+   * trimmed, or a `RangeError`. Gives the conversation as it now stands; undefined when no run made it.
+   */
+  update(
+    key: string,
+    change: { title: string },
+  ): Promise<ConversationInfo | undefined>;
+  /**
    * Stop a run, as a person asks it to. The run going on stops at once, with the steers that joined it and the runs
    * queued behind it, as pi's `abort()` does: nothing the person asked for goes on. A queued run alone is withdrawn,
    * and the rest go on. Kept before pi aborts it, so a crash between stops it too. A run that has ended stays as it
@@ -340,7 +355,13 @@ export type Runtime = {
 const context = BACKGROUND_CONTEXT;
 
 /** What a run gives its conversation: what the conversation's first run makes it with, and every run gives again. */
-type Made = Omit<ConversationState, "runs">;
+type Made = Omit<ConversationState, "runs" | "title" | "createdAt">;
+
+/** The most characters a title holds: a cut first input, or a rename. */
+const titleMax = 200;
+
+/** How many characters of the first input a title keeps, as a list shows it on one line. */
+const titleCut = 80;
 
 /**
  * Open a runtime: one pi harness on `storage`, with each agent installed as its own extension. Runs a crash left
@@ -452,14 +473,18 @@ export async function openRuntime({
 
   /**
    * The conversation of a key: made with its agent, its document and its middleware's state in one commit, or the one
-   * the key already has, when it was made with the same agent, caller and context.
+   * the key already has, when it was made with the same agent, caller and context. A conversation made now is titled
+   * by its first input.
    */
   async function conversationOf(
     agent: AnyAgent,
     extension: Extension,
     given: Made,
+    input: string,
   ) {
     const key = given.conversation;
+    // Read before the commit, which may run again.
+    const createdAt = new Date().toISOString();
     const made = await harness.snapshot(ConversationIndex, key, context);
     // Each middleware's beforeAgent runs once, for a conversation not made yet, outside the commit that keeps it.
     const states =
@@ -478,7 +503,11 @@ export async function openRuntime({
         instructions: agent.instructions,
         extensions: [extension, tracing.extension],
       });
-      Object.assign(await tx.doc(ConversationDoc, id), given, { runs: [] });
+      Object.assign(await tx.doc(ConversationDoc, id), given, {
+        title: titleOf(input),
+        createdAt,
+        runs: [],
+      });
       // So the questions its runs' calls ask can be watched from its first run.
       await tx.doc(InterruptsDoc, id);
       (await tx.doc(CallerIndex, given.caller.id, null)).conversations.push({
@@ -705,12 +734,18 @@ export async function openRuntime({
           attended,
         );
     const parent = activeParent();
-    const conversation = await conversationOf(agent, entry.extension, {
-      conversation: key,
-      agent: agent.name,
-      caller,
-      ...(options.context === undefined ? {} : { context: options.context }),
-    });
+    const conversation = await conversationOf(
+      agent,
+      entry.extension,
+      {
+        conversation: key,
+        agent: agent.name,
+        caller,
+        ...(options.context === undefined ? {} : { context: options.context }),
+      },
+      // A resume answers a run that made the conversation already.
+      typeof input === "string" ? input : "",
+    );
     const submission = await admit(
       conversation,
       key,
@@ -866,6 +901,20 @@ export async function openRuntime({
   async function conversation(key: string) {
     const id = await idOf(key);
     return id === undefined ? undefined : infoOf(harness, id);
+  }
+
+  async function update(key: string, { title }: { title: string }) {
+    const given = title.trim();
+    if (given.length < 1 || given.length > titleMax)
+      throw new RangeError(
+        `a title is 1 to ${titleMax} characters once trimmed, not ${given.length}`,
+      );
+    const id = await idOf(key);
+    if (id === undefined) return undefined;
+    await harness.commit(async (tx) => {
+      (await tx.doc(ConversationDoc, id)).title = given;
+    }, context);
+    return infoOf(harness, id);
   }
 
   async function entries(
@@ -1190,6 +1239,7 @@ export async function openRuntime({
     conversations,
     runs,
     runOf,
+    update,
     stop,
     watch,
     async close() {
@@ -1210,17 +1260,24 @@ function checkLimit(limit: number) {
 
 /** A conversation as a client reads it: what its first run made it with, and how it stands now. */
 async function infoOf(
-  reader: DocumentReader,
+  reader: Harness,
   id: ConversationId,
 ): Promise<ConversationInfo> {
   const kept = await reader.snapshot(ConversationDoc, id, context);
   if (!kept) throw new Error(`conversation ${id}: its document is missing`);
+  const transcript = await reader.conversation(id, context);
+  if (!transcript) throw new Error(`conversation ${id}: it is missing`);
   const live = (await reader.snapshot(LiveDoc, id, context)) ?? {};
+  const newest = await lastMessageTime(transcript, context);
   const made = {
     conversation: kept.conversation,
     agent: kept.agent,
     caller: kept.caller,
     ...(kept.context === undefined ? {} : { context: kept.context }),
+    title: kept.title,
+    createdAt: kept.createdAt,
+    lastMessageAt:
+      newest === undefined ? kept.createdAt : new Date(newest).toISOString(),
   };
   if (live.run === undefined) {
     // A run a person stopped ended as they asked: the conversation is idle, not in error.
@@ -1289,6 +1346,18 @@ async function stoppedAll(
 }
 
 /** Refuse a run that gives a conversation another agent, caller or context than its first run made it with. */
+/**
+ * A conversation's title from its first input, as a list shows it on one line: its words with single spaces between,
+ * cut at the last space before the limit, with "…".
+ */
+function titleOf(input: string): string {
+  const words = input.replace(/\s+/g, " ").trim();
+  if (words.length <= titleCut) return words;
+  const cut = words.slice(0, titleCut - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${space > 0 ? cut.slice(0, space) : cut}…`;
+}
+
 function refuseOther(kept: ConversationState, given: Made) {
   const key = given.conversation;
   if (kept.agent !== given.agent) {

@@ -191,6 +191,9 @@ describe("a conversation, as it stands", () => {
       agent: "geo",
       caller: owner,
       context: { team: "ops" },
+      title: "Hi.",
+      createdAt: expect.stringMatching(iso),
+      lastMessageAt: expect.stringMatching(iso),
       status: "idle",
       interrupts: [],
     });
@@ -261,6 +264,78 @@ describe("a conversation, as it stands", () => {
     const kept = await runtime.conversation("a");
     expect(kept).toMatchObject({ status: "idle" });
     expect(kept).not.toHaveProperty("runFailure");
+  });
+});
+
+/** An ISO 8601 time, as `toISOString()` writes it. */
+const iso = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
+
+describe("a conversation's title and times", () => {
+  it("is titled by its first input, made at a time, and last written to at its newest message", async () => {
+    const runtime = await open();
+    const before = Date.now();
+    faux.setResponses([says("Paris.")]);
+    await runtime.run(geo, "  What is the\ncapital of France?  ", {
+      conversation: "a",
+      runId: "1",
+      caller: owner,
+    });
+    const first = (await runtime.conversation("a"))!;
+    expect(first.title).toBe("What is the capital of France?");
+    expect(Date.parse(first.createdAt)).toBeGreaterThanOrEqual(before);
+    // pi's newest message: the answer, stamped when its request started.
+    const [answer] = (await runtime.entries("a", {}, 1))!.items;
+    expect(first.lastMessageAt).toBe(
+      new Date(answer!.model!.at(-1)!.timestamp).toISOString(),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    faux.setResponses([says("Rome.")]);
+    await runtime.run(geo, "And of Italy?", {
+      conversation: "a",
+      runId: "2",
+      caller: owner,
+    });
+    const second = (await runtime.conversation("a"))!;
+    // The title and the time it was made are its first run's; the newest message is the second run's.
+    expect(second.title).toBe(first.title);
+    expect(second.createdAt).toBe(first.createdAt);
+    expect(Date.parse(second.lastMessageAt)).toBeGreaterThan(
+      Date.parse(first.lastMessageAt),
+    );
+    expect((await runtime.conversations(owner)).items).toEqual([second]);
+  });
+
+  it("cuts a long first input at the last space within 80 characters, with an ellipsis", async () => {
+    const runtime = await open();
+    const input = `${"word ".repeat(30)}end`;
+    await answered(runtime, "a");
+    faux.setResponses([says("Ok.")]);
+    await runtime.run(geo, input, {
+      conversation: "b",
+      runId: "1",
+      caller: owner,
+    });
+    const { title } = (await runtime.conversation("b"))!;
+    expect(title).toBe(`${"word ".repeat(15).trimEnd()}…`);
+    expect(title.length).toBeLessThanOrEqual(80);
+  });
+
+  it("is renamed by an update, trimmed, and refuses a title empty or over 200 characters", async () => {
+    const runtime = await open();
+    await answered(runtime, "a");
+    const renamed = await runtime.update("a", { title: "  Trip planning  " });
+    expect(renamed).toMatchObject({
+      conversation: "a",
+      title: "Trip planning",
+    });
+    expect((await runtime.conversation("a"))?.title).toBe("Trip planning");
+    await expect(runtime.update("a", { title: "   " })).rejects.toBeInstanceOf(
+      RangeError,
+    );
+    await expect(
+      runtime.update("a", { title: "x".repeat(201) }),
+    ).rejects.toBeInstanceOf(RangeError);
+    expect(await runtime.update("none", { title: "Nothing" })).toBeUndefined();
   });
 });
 

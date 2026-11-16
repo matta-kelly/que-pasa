@@ -93,6 +93,13 @@ const secret = defineAgent({
   tools: [],
 });
 
+/** A conversation's title and times as a client reads them: its first input, and the times it was made and last written to. */
+const titled = (title: string) => ({
+  title,
+  createdAt: expect.stringMatching(/^\d{4}-\d\d-\d\dT[\d:.]+Z$/),
+  lastMessageAt: expect.stringMatching(/^\d{4}-\d\d-\d\dT[\d:.]+Z$/),
+});
+
 /** Who a request is from: the test's stand-in for a deployment's login, a header. */
 const as = (id: string) => ({ "x-caller": id });
 
@@ -454,8 +461,20 @@ describe("the server's history routes", () => {
       next: string;
     };
     expect(page.items).toEqual([
-      { conversation: "c", agent: "geo", status: "idle", interrupts: [] },
-      { conversation: "b", agent: "seller", status: "idle", interrupts: [] },
+      {
+        conversation: "c",
+        agent: "geo",
+        ...titled("Hi"),
+        status: "idle",
+        interrupts: [],
+      },
+      {
+        conversation: "b",
+        agent: "seller",
+        ...titled("Hi"),
+        status: "idle",
+        interrupts: [],
+      },
     ]);
     const second = await get(
       server,
@@ -463,7 +482,13 @@ describe("the server's history routes", () => {
     );
     expect(await second.json()).toEqual({
       items: [
-        { conversation: "a", agent: "geo", status: "idle", interrupts: [] },
+        {
+          conversation: "a",
+          agent: "geo",
+          ...titled("Hi"),
+          status: "idle",
+          interrupts: [],
+        },
       ],
     });
     const geoOnly = await get(server, "/conversations?agent=geo");
@@ -533,6 +558,7 @@ describe("the server's history routes", () => {
     expect(await read.json()).toEqual({
       conversation: "cl-42/geo",
       agent: "geo",
+      ...titled("Hi"),
       status: "idle",
       interrupts: [],
     });
@@ -549,6 +575,47 @@ describe("the server's history routes", () => {
         "conversation_not_found",
       ]);
     }
+  });
+
+  it("rename one of the caller's conversations; a bad title is 400, and another caller's is not found", async () => {
+    const server = await serve();
+    await answered(server, "a");
+    const patch = (body: unknown, caller = "owner") =>
+      server.fetch(
+        new Request("http://que/conversations/a", {
+          method: "PATCH",
+          headers: { ...as(caller), "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+      );
+    const renamed = await patch({ title: " Trip planning " });
+    expect(renamed.status).toBe(200);
+    expect(await renamed.json()).toMatchObject({
+      conversation: "a",
+      title: "Trip planning",
+    });
+    expect(await (await get(server, "/conversations/a")).json()).toMatchObject({
+      title: "Trip planning",
+    });
+    for (const body of [
+      { title: "" },
+      { title: "x".repeat(201) },
+      {},
+      { title: "t", other: 1 },
+    ]) {
+      const bad = await patch(body);
+      expect([bad.status, await errorOf(bad)]).toEqual([400, "bad_request"]);
+    }
+    const hidden = await patch({ title: "Theirs" }, "stranger");
+    expect([hidden.status, await errorOf(hidden)]).toEqual([
+      404,
+      "conversation_not_found",
+    ]);
+    await expect(
+      server.update(new Request("http://que/", { headers: as("owner") }), "a", {
+        title: "Again",
+      }),
+    ).resolves.toMatchObject({ title: "Again" });
   });
 
   it("read a conversation that waits on a login: the run to answer on, and its question with the deployment's page", async () => {
@@ -570,6 +637,7 @@ describe("the server's history routes", () => {
     expect(await read.json()).toEqual({
       conversation: "c",
       agent: "seller",
+      ...titled("Who am I?"),
       status: "interrupted",
       runId: "1",
       interrupts: asked.interrupts,
@@ -580,6 +648,7 @@ describe("the server's history routes", () => {
         {
           conversation: "c",
           agent: "seller",
+          ...titled("Who am I?"),
           status: "interrupted",
           runId: "1",
           interrupts: asked.interrupts,
@@ -720,6 +789,7 @@ describe("the server's operations, for a way in in the same process", () => {
     const info = {
       conversation: "c",
       agent: "geo",
+      ...titled("Capital of France?"),
       status: "idle",
       interrupts: [],
     };
