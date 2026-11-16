@@ -70,6 +70,7 @@ import {
   ConversationIndex,
   type ConversationState,
   MiddlewareDoc,
+  NoteEntry,
   RunDoc,
   type RunState,
   runGoingOn,
@@ -170,6 +171,14 @@ export type RunInfo = {
    */
   entries?: { first: EntryId; last?: EntryId };
 };
+
+/**
+ * A note as it stands: placed in the conversation, with its entry, or queued for the run going on to place at its next
+ * step.
+ */
+export type NoteInfo = { noteId: string } & (
+  { status: "placed"; entry: EntryId } | { status: "queued" }
+);
 
 /** A question a run's call asked, and its answer once given. */
 export type Question = Interrupt & { answer?: Json };
@@ -332,6 +341,17 @@ export type Runtime = {
     key: string,
     change: { title: string },
   ): Promise<ConversationInfo | undefined>;
+  /**
+   * Put a message in a conversation for its runs to read, as a user message, without starting a run: OpenAI's message
+   * added to a thread, apart from its run. On an idle conversation it is placed at once, and the next run reads it; while
+   * a run goes on, or waits, it is placed at that run's next step, as a steer is, and that run reads it. Its `noteId` is
+   * its key: the same note again is placed once. `text` is 1 character or more once trimmed, or a `RangeError`.
+   * Undefined when no run made the conversation.
+   */
+  note(
+    key: string,
+    note: { noteId: string; text: string },
+  ): Promise<NoteInfo | undefined>;
   /**
    * Stop a run, as a person asks it to. The run going on stops at once, with the steers that joined it and the runs
    * queued behind it, as pi's `abort()` does: nothing the person asked for goes on. A queued run alone is withdrawn,
@@ -917,6 +937,48 @@ export async function openRuntime({
     return infoOf(harness, id);
   }
 
+  async function note(
+    key: string,
+    { noteId, text }: { noteId: string; text: string },
+  ): Promise<NoteInfo | undefined> {
+    if (noteId === "") throw new RangeError("a note's id is empty");
+    if (text.trim() === "")
+      throw new RangeError("a note's text is 1 character or more once trimmed");
+    const id = await idOf(key);
+    if (id === undefined) return undefined;
+    const conversation = await harness.conversation(id, context);
+    if (!conversation) throw new Error(`conversation "${key}": it is missing`);
+    // Read outside the commit, which may run again: the note keeps the time it was sent.
+    const timestamp = Date.now();
+    const submission = await harness.commit(async (tx) => {
+      const kept = await tx.doc(ConversationDoc, id);
+      const had = kept.notes?.[noteId];
+      if (had !== undefined) return had as SubmissionId;
+      // pi's passive write: placed at once when idle, at the run's next step when busy; it starts no run.
+      const written = await conversation.submit(tx, {
+        type: "write",
+        entry: {
+          kind: NoteEntry.kind,
+          data: { noteId },
+          model: [{ role: "user", content: text, timestamp }],
+        },
+      });
+      kept.notes = { ...kept.notes, [noteId]: written };
+      return written;
+    }, context);
+    const record = await (
+      await harness.submission(submission, context)
+    )?.status(context);
+    if (record?.type !== "write")
+      throw new Error(`note "${noteId}": its submission is missing`);
+    if (record.status === "queued") return { noteId, status: "queued" };
+    if (record.status === "done")
+      return { noteId, status: "placed", entry: record.entry };
+    throw new Error(
+      `note "${noteId}": pi could not place it: ${record.reason}`,
+    );
+  }
+
   async function entries(
     key: string,
     query: Omit<EntryQuery, "conversationId">,
@@ -1240,6 +1302,7 @@ export async function openRuntime({
     runs,
     runOf,
     update,
+    note,
     stop,
     watch,
     async close() {

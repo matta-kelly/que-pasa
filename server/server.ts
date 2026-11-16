@@ -26,6 +26,7 @@ import {
 import {
   type ConnectionQuestion,
   type ConversationInfo as Kept,
+  type NoteInfo,
   type RunInfo,
   RunFailed,
   RunRefused,
@@ -198,6 +199,15 @@ export type Server = {
     conversation: string,
     change: { title: string },
   ) => Promise<ConversationInfo>;
+  /**
+   * Put a message in one of the caller's conversations for its runs to read, starting no run: placed at once when it is
+   * idle, at the run's next step while one goes on. The same `noteId` again is placed once.
+   */
+  note: (
+    request: Request,
+    conversation: string,
+    note: { noteId: string; text: string },
+  ) => Promise<NoteInfo>;
   /** A page of one of the caller's conversation's runs, LangGraph's runs of a thread, the newest admitted first. */
   runs: (
     request: Request,
@@ -244,6 +254,12 @@ const ConversationsParams = z.strictObject({
 
 /** A conversation's change: its title, as LangGraph's thread PATCH changes a thread. */
 const UpdateBody = z.strictObject({ title: z.string() });
+
+/** A note: its id, the client's key for it, and its text. */
+const NoteBody = z.strictObject({
+  noteId: z.string().min(1),
+  text: z.string(),
+});
 
 /** The query string of the runs route. */
 const RunsParams = z.strictObject({ limit: Limit, cursor: CursorParam });
@@ -538,6 +554,23 @@ export function createServer({
     return infoOut(agent, caller, changed!);
   }
 
+  async function note(
+    request: Request,
+    key: string,
+    given: { noteId: string; text: string },
+  ) {
+    await readable(request, key);
+    try {
+      // Readable, so made: a conversation is never removed.
+      return (await runtime.note(key, given))!;
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      throw new ServerError(400, "bad_request", error.message, {
+        cause: error,
+      });
+    }
+  }
+
   async function entries(
     request: Request,
     key: string,
@@ -623,6 +656,14 @@ export function createServer({
       throw new ServerError(400, "bad_request", z.prettifyError(body.error));
     return c.json(
       await update(c.req.raw, c.req.param("conversation"), body.data),
+    );
+  });
+  app.post("/conversations/:conversation/notes", async (c) => {
+    const body = NoteBody.safeParse(await c.req.json().catch(() => undefined));
+    if (!body.success)
+      throw new ServerError(400, "bad_request", z.prettifyError(body.error));
+    return c.json(
+      await note(c.req.raw, c.req.param("conversation"), body.data),
     );
   });
   app.get("/conversations/:conversation/runs", async (c) =>
@@ -763,6 +804,7 @@ export function createServer({
     conversations,
     conversation,
     update,
+    note,
     entries,
     runs,
     runOf,

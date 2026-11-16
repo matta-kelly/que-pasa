@@ -16,10 +16,16 @@ import {
 } from "@earendil-works/pi-durable";
 import type { DynamicToolUIPart, UIMessage } from "ai";
 import type { Json } from "../../define/index.ts";
-import type { Question, RunInfo } from "../../loop/index.ts";
+import { NoteEntry, type Question, type RunInfo } from "../../loop/index.ts";
 
-/** The data parts a chat's messages carry: a steer, a message that joined the run while it went on. */
-export type ChatDataParts = { steer: { text: string } };
+/**
+ * The data parts a chat's messages carry: a steer, a message that joined the run while it went on; and a note, a message
+ * put in the conversation for its runs to read, which started no run.
+ */
+export type ChatDataParts = {
+  steer: { text: string };
+  note: { text: string };
+};
 
 /** A chat's message: a frontend gives it to `useChat<ChatMessage>()` to type its parts. */
 export type ChatMessage = UIMessage<never, ChatDataParts>;
@@ -56,8 +62,8 @@ export function userMessageOf({
 
 /**
  * What the agent did for a run, as one assistant message: each model response a step, with its text, its reasoning
- * and its tool calls, each call carrying its question and its result; a steer where it joined; and, while the run goes
- * on, the response being written. A response pi retried is left out, as the stream's `reset-step` removes it.
+ * and its tool calls, each call carrying its question and its result; a steer where it joined; a note where it was
+ * placed, during the run or after it; and, while the run goes on, the response being written. A response pi retried is left out, as the stream's `reset-step` removes it.
  */
 export function assistantMessageOf({
   info,
@@ -79,6 +85,14 @@ export function assistantMessageOf({
       // Not a steer: a harness's own reminder to the model, not a person's.
       if (steer !== undefined && text !== undefined)
         parts.push({ type: "data-steer", id: steer, data: { text } });
+    } else if (NoteEntry.is(entry)) {
+      const text = textOf(entry.model?.[0]?.content);
+      if (text !== undefined)
+        parts.push({
+          type: "data-note",
+          id: entry.data.noteId,
+          data: { text },
+        });
     } else if (AssistantEntry.is(entry)) {
       const message = entry.model?.[0] as AssistantMessage | undefined;
       if (!message || message.stopReason === "error") continue;

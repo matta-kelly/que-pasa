@@ -14,4 +14,4 @@ export {
   ServerError,
   type ServerOptions,
 } from "./server.ts";
-export type { Question, RunInfo, RunStatus } from "../loop/index.ts";
+export type { NoteInfo, Question, RunInfo, RunStatus } from "../loop/index.ts";

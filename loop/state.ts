@@ -3,6 +3,7 @@ import {
   type ConversationId,
   defineDoc,
   defineDocFamily,
+  defineEntry,
   type DocumentReader,
   LiveDoc,
   type UsageState,
@@ -39,7 +40,15 @@ export type ConversationState = {
    * Absent on a conversation made before it was kept: its run going on is its last.
    */
   inputs?: Record<string, string>;
+  /** Each note's submission by the note's id, so the same note sent again is placed once. Absent before its first. */
+  notes?: Record<string, number>;
 };
+
+/**
+ * A note: a message put in a conversation for its runs to read, which starts no run. Its `model` is one user message;
+ * its data, the note's id, by which a client tells it from a person's input.
+ */
+export const NoteEntry = defineEntry<{ noteId: string }>("que-pasa.note");
 
 /** The conversation's own document, written in the commit that makes it. */
 export const ConversationDoc = defineDoc<ConversationState>({

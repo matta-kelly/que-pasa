@@ -461,6 +461,39 @@ describe("the chat surface, with the AI SDK's own client", () => {
       (await history(server)).messages.map((message) => message.id),
     ).toEqual(["m1", "m1:answer", "m2", "m2:answer"]);
   });
+
+  it("shows a note where it was placed: streamed during the run, and after it in history, as a data part", async () => {
+    const server = await serve();
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("hold", {}, { id: "h" })], {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage([fauxText("Done.")]),
+    ]);
+    const going = holding();
+    const first = send_(server, [said("m1", "Hold.")]);
+    await going;
+    const owner = new Request("http://que/", {
+      headers: { "x-caller": "owner" },
+    });
+    await server.note(owner, "c", { noteId: "n1", text: "Main moved." });
+    release();
+    const streamed = (await first).at(-1)!;
+    const during = {
+      type: "data-note",
+      id: "n1",
+      data: { text: "Main moved." },
+    };
+    expect(streamed.parts).toContainEqual(during);
+    await server.note(owner, "c", { noteId: "n2", text: "Re-read the type." });
+    const [, answered] = (await history(server)).messages;
+    expect(answered!.parts.filter((part) => part.type === "data-note")).toEqual(
+      [
+        during,
+        { type: "data-note", id: "n2", data: { text: "Re-read the type." } },
+      ],
+    );
+  });
 });
 
 describe("the LangGraph routes for a conversation's runs", () => {

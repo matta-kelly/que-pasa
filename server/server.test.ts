@@ -618,6 +618,65 @@ describe("the server's history routes", () => {
     ).resolves.toMatchObject({ title: "Again" });
   });
 
+  it("note one of the caller's conversations, starting no run; once by its id, a bad note is 400, another caller's is not found", async () => {
+    const server = await serve();
+    await answered(server, "a");
+    const post = (body: unknown, caller = "owner") =>
+      server.fetch(
+        new Request("http://que/conversations/a/notes", {
+          method: "POST",
+          headers: { ...as(caller), "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+      );
+    const before = calls();
+    const noted = await post({ noteId: "n1", text: "Main moved." });
+    expect(noted.status).toBe(200);
+    const placed = await noted.json();
+    expect(placed).toEqual({
+      noteId: "n1",
+      status: "placed",
+      entry: expect.any(Number),
+    });
+    expect(
+      await (await post({ noteId: "n1", text: "Main moved." })).json(),
+    ).toEqual(placed);
+    expect(calls()).toBe(before);
+    const entries = await (
+      await get(server, "/conversations/a/entries?limit=1")
+    ).json();
+    expect(entries.items).toMatchObject([
+      {
+        id: placed.entry,
+        kind: "que-pasa.note",
+        model: [{ role: "user", content: "Main moved." }],
+      },
+    ]);
+    expect(await (await get(server, "/conversations/a")).json()).toMatchObject({
+      status: "idle",
+    });
+    for (const body of [
+      { noteId: "n2", text: "  " },
+      { noteId: "", text: "Main moved." },
+      { text: "Main moved." },
+      { noteId: "n2", text: "t", other: 1 },
+    ]) {
+      const bad = await post(body);
+      expect([bad.status, await errorOf(bad)]).toEqual([400, "bad_request"]);
+    }
+    const hidden = await post({ noteId: "n3", text: "Theirs." }, "stranger");
+    expect([hidden.status, await errorOf(hidden)]).toEqual([
+      404,
+      "conversation_not_found",
+    ]);
+    await expect(
+      server.note(new Request("http://que/", { headers: as("owner") }), "a", {
+        noteId: "n4",
+        text: "Again.",
+      }),
+    ).resolves.toMatchObject({ noteId: "n4", status: "placed" });
+  });
+
   it("read a conversation that waits on a login: the run to answer on, and its question with the deployment's page", async () => {
     logins.clear();
     const server = await serve({

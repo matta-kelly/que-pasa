@@ -109,11 +109,12 @@ export class MessageDiff {
       case "dynamic-tool":
         return toolChunks(from as DynamicToolUIPart | undefined, to);
       case "data-steer":
+      case "data-note":
         return from
           ? []
           : [
               {
-                type: "data-steer",
+                type: to.type,
                 ...(to.id === undefined ? {} : { id: to.id }),
                 data: to.data,
               },

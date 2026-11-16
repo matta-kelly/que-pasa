@@ -12,6 +12,7 @@ import { z } from "zod";
 import { defineAgent, defineTool } from "../define/index.ts";
 import { humanInTheLoop } from "../middleware/index.ts";
 import {
+  NoteEntry,
   openRuntime,
   RunFailed,
   type RunOptions,
@@ -304,5 +305,110 @@ describe("an input to a busy conversation", () => {
         .then(resultOf),
     ).resolves.toBe("Sent.");
     await expect(second.outcome.then(resultOf)).resolves.toBe("Second.");
+  });
+});
+
+describe("a note", () => {
+  it("is placed at once on an idle conversation, starts no run, and the next run reads it before its input", async () => {
+    const runtime = await open();
+    seen.length = 0;
+    faux.setResponses([seeing(says("One.")), seeing(says("Two."))]);
+    await runtime.run(agent, "One.", options("1")).then(resultOf);
+    const before = (await runtime.conversation("c"))!;
+    const placed = await runtime.note("c", {
+      noteId: "n1",
+      text: "You have a remove tool now.",
+    });
+    expect(placed).toEqual({
+      noteId: "n1",
+      status: "placed",
+      entry: expect.any(Number),
+    });
+    const [entry] = (await runtime.entries("c", {}, 1))!.items;
+    expect(entry).toMatchObject({
+      id: (placed as { entry: number }).entry,
+      kind: NoteEntry.kind,
+      data: { noteId: "n1" },
+      model: [{ role: "user", content: "You have a remove tool now." }],
+    });
+    const after = (await runtime.conversation("c"))!;
+    expect(after).toMatchObject({ status: "idle" });
+    expect(Date.parse(after.lastMessageAt)).toBeGreaterThanOrEqual(
+      Date.parse(before.lastMessageAt),
+    );
+    expect((await runtime.runs("c"))!.items.map((run) => run.runId)).toEqual([
+      "1",
+    ]);
+    await runtime.run(agent, "Two.", options("2")).then(resultOf);
+    expect(seen).toEqual([
+      ["One."],
+      ["One.", "You have a remove tool now.", "Two."],
+    ]);
+  });
+
+  it("is placed once by its id, sent again", async () => {
+    const runtime = await open();
+    faux.setResponses([says("One.")]);
+    await runtime.run(agent, "One.", options("1")).then(resultOf);
+    const first = await runtime.note("c", {
+      noteId: "n1",
+      text: "Main moved.",
+    });
+    const again = await runtime.note("c", {
+      noteId: "n1",
+      text: "Main moved.",
+    });
+    expect(again).toEqual(first);
+    const notes = (await runtime.entries("c", {}, 50))!.items.filter((entry) =>
+      NoteEntry.is(entry),
+    );
+    expect(notes).toHaveLength(1);
+  });
+
+  it("refuses an empty text or id, and is undefined for a key no run made", async () => {
+    const runtime = await open();
+    faux.setResponses([says("One.")]);
+    await runtime.run(agent, "One.", options("1")).then(resultOf);
+    await expect(
+      runtime.note("c", { noteId: "n1", text: "  " }),
+    ).rejects.toBeInstanceOf(RangeError);
+    await expect(
+      runtime.note("c", { noteId: "", text: "Main moved." }),
+    ).rejects.toBeInstanceOf(RangeError);
+    expect(
+      await runtime.note("none", { noteId: "n1", text: "Main moved." }),
+    ).toBeUndefined();
+  });
+
+  it("is queued while a run goes on, and that run reads it at its next step", async () => {
+    const runtime = await open();
+    seen.length = 0;
+    nextHold();
+    faux.setResponses([seeing(calls("hold", "h")), seeing(says("Done."))]);
+    const going = start(runtime, "One.", "1");
+    await holding;
+    expect(
+      await runtime.note("c", { noteId: "n1", text: "Main moved." }),
+    ).toEqual({ noteId: "n1", status: "queued" });
+    release();
+    await expect(going.outcome.then(resultOf)).resolves.toBe("Done.");
+    expect(seen).toEqual([["One."], ["One.", "Main moved."]]);
+    expect(
+      await runtime.note("c", { noteId: "n1", text: "Main moved." }),
+    ).toMatchObject({ noteId: "n1", status: "placed" });
+  });
+
+  it("queued behind a run that is stopped, is kept, and the next run reads it", async () => {
+    const runtime = await open();
+    seen.length = 0;
+    nextHold();
+    faux.setResponses([seeing(calls("hold", "h")), seeing(says("Two."))]);
+    const going = start(runtime, "One.", "1");
+    await holding;
+    await runtime.note("c", { noteId: "n1", text: "Main moved." });
+    await runtime.stop("c", "1");
+    await expect(going.outcome).rejects.toMatchObject({ reason: "stopped" });
+    await runtime.run(agent, "Two.", options("2")).then(resultOf);
+    expect(seen.at(-1)).toEqual(["One.", "Main moved.", "Two."]);
   });
 });
