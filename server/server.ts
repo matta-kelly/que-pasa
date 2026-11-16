@@ -208,6 +208,11 @@ export type Server = {
     conversation: string,
     note: { noteId: string; text: string },
   ) => Promise<NoteInfo>;
+  /**
+   * Delete one of the caller's conversations, as LangGraph's thread delete: the run going on is stopped first, then it
+   * is read as not found, and a run on its key makes a new one. Its history stays in pi's storage, unread.
+   */
+  delete: (request: Request, conversation: string) => Promise<void>;
   /** A page of one of the caller's conversation's runs, LangGraph's runs of a thread, the newest admitted first. */
   runs: (
     request: Request,
@@ -571,6 +576,11 @@ export function createServer({
     }
   }
 
+  async function remove(request: Request, key: string) {
+    await readable(request, key);
+    await runtime.delete(key);
+  }
+
   async function entries(
     request: Request,
     key: string,
@@ -657,6 +667,10 @@ export function createServer({
     return c.json(
       await update(c.req.raw, c.req.param("conversation"), body.data),
     );
+  });
+  app.delete("/conversations/:conversation", async (c) => {
+    await remove(c.req.raw, c.req.param("conversation"));
+    return c.body(null, 204);
   });
   app.post("/conversations/:conversation/notes", async (c) => {
     const body = NoteBody.safeParse(await c.req.json().catch(() => undefined));
@@ -805,6 +819,7 @@ export function createServer({
     conversation,
     update,
     note,
+    delete: remove,
     entries,
     runs,
     runOf,

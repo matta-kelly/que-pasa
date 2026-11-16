@@ -618,6 +618,45 @@ describe("the server's history routes", () => {
     ).resolves.toMatchObject({ title: "Again" });
   });
 
+  it("delete one of the caller's conversations: 204, then not found; another caller's is not found", async () => {
+    const server = await serve();
+    await answered(server, "a");
+    await answered(server, "b");
+    const remove = (key: string, caller = "owner") =>
+      server.fetch(
+        new Request(`http://que/conversations/${key}`, {
+          method: "DELETE",
+          headers: as(caller),
+        }),
+      );
+    const hidden = await remove("a", "stranger");
+    expect([hidden.status, await errorOf(hidden)]).toEqual([
+      404,
+      "conversation_not_found",
+    ]);
+    const deleted = await remove("a");
+    expect(deleted.status).toBe(204);
+    expect(await deleted.text()).toBe("");
+    const gone = await get(server, "/conversations/a");
+    expect([gone.status, await errorOf(gone)]).toEqual([
+      404,
+      "conversation_not_found",
+    ]);
+    const again = await remove("a");
+    expect([again.status, await errorOf(again)]).toEqual([
+      404,
+      "conversation_not_found",
+    ]);
+    const listed = await (await get(server, "/conversations")).json();
+    expect(
+      listed.items.map((each: { conversation: string }) => each.conversation),
+    ).toEqual(["b"]);
+    await expect(
+      server.delete(new Request("http://que/", { headers: as("owner") }), "b"),
+    ).resolves.toBeUndefined();
+    expect((await get(server, "/conversations/b")).status).toBe(404);
+  });
+
   it("note one of the caller's conversations, starting no run; once by its id, a bad note is 400, another caller's is not found", async () => {
     const server = await serve();
     await answered(server, "a");

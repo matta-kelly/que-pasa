@@ -122,6 +122,8 @@ What a client reads of its conversations, as LangGraph's thread search, thread, 
 	- `interrupts`: the questions it waits on, when interrupted
 	- `runFailure`: pi's reason and detail, when `error`
 - `runtime.update(key, { title })`: renames it, LangGraph's thread update: a title of 1 to 200 characters once trimmed, or a `RangeError`. Gives how it now stands
+- `runtime.delete(key)`: deletes it, LangGraph's thread delete: the run going on is stopped first, with what is queued behind it; then it leaves its caller's list, marked in place so a page's position holds, and its key, so every read of the key gives undefined and a run on it makes a new conversation
+	- a hide, not an erase: pi has no way to remove a conversation from storage, so its history stays there, unread. An erase waits on pi
 - `runtime.entries(key, query, limit, cursor)`: a page of its entries, pi's transcript records, as pi's `conversation.entries()` gives them: `query` is pi's `EntryQuery` (`order`, newest first by default; `minEntryId`, `maxEntryId`)
 	- without the system entries: the instructions and tool definitions are the deployment's. A client sees the messages, as `onMessages` gives them
 	- a page is filled to `limit` while the scan has more, and `next` is pi's cursor, set only while it does: so pi's `ConversationTranscript`, which pages by entry ids and ends on no `next`, pages it as it pages pi's own
@@ -139,7 +141,7 @@ What holds in every state of every run. Each is held by construction, and checke
 
 | Invariant | Held by | Checked by |
 |---|---|---|
-| one conversation per key, of one agent, caller and context | the conversation index, a session document per key; the conversation document, written once, in the commit that makes it; every run checked against it | `runtime.test.ts`: another agent, caller or context refused |
+| one conversation per key, of one agent, caller and context, until it is deleted | the conversation index, a session document per key, cleared by a delete; the conversation document, written once, in the commit that makes it; every run checked against it | `runtime.test.ts`: another agent, caller or context refused; `history.test.ts`: a run on a deleted key makes a new one |
 | one run per run id in a conversation: the same id again is the same run, never a second | the input in with the run id as pi's `requestId`, looked up before it is admitted | `runtime.test.ts`: the same run id again, one model call |
 | one run at a time on a conversation, and each input either refused, queued in order, or joined to the run going on | pi's inbox: the input admitted with its `whenBusy`, follow-ups one at a time; the run going on found from pi's run, never from the last admitted | `busy.test.ts`: refused, followed up, steered; `crash.test.ts`: a follow-up queued, killed, both run once, in order |
 | no run state in memory: a new process can go on with any run | the conversation's and the run's documents; the result and the reminders in the transcript | `crash.test.ts`: every crash point, in a new process |
@@ -159,7 +161,7 @@ What holds in every state of every run. Each is held by construction, and checke
 | a run's result, usage and trace are its own, not the conversation's | the result read from the run's submission; the usage from what the conversation had spent at each run's start, kept before its first model request; a segment per run | `runtime.test.ts`, `trace.test.ts`, `busy.test.ts`: two runs on one conversation, also a follow-up queued behind the first |
 | the result is the run's last submit that passed the schema | the submit tool parses with zod before it keeps the result; a failed parse goes back to the model; the reminder counts only the run's own entries | `runtime.test.ts`: a bad submit, then a good one; a second run reminded though the first submitted |
 | every segment of a run is in one trace | the run document keeps the span the run started in, or its first segment | `crash.test.ts`: the resumed segment under the host's span |
-| a caller's list holds every conversation made for them, and no other's | the caller index, appended in the commit that makes the conversation, keyed by the caller the conversation acts for | `history.test.ts`: three made for one caller, one for another, each listed to its own |
+| a caller's list holds every conversation made for them and not deleted, and no other's | the caller index, appended in the commit that makes the conversation, keyed by the caller the conversation acts for; a delete marks its entry, in one commit with clearing its key | `history.test.ts`: three made for one caller, one for another, each listed to its own; one of three deleted, the rest paged whole |
 | a client reads the messages, never the deployment's system prompt | the entries read without pi's system entries, a page filled past them | `history.test.ts`: every message of two runs, paged one at a time each way, and no system entry |
 | tracing never fails a run | each hook's tracing runs guarded; an error goes to OpenTelemetry's `diag` | the whole suite runs with and without an SDK |
 

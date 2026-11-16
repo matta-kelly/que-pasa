@@ -156,10 +156,13 @@ export const ConversationIndex = defineDocFamily<
 
 /**
  * A caller's conversations, in the order they were made: one document per caller id, appended in the commit that makes
- * the conversation, so a caller's list is read without a scan of every conversation.
+ * the conversation, so a caller's list is read without a scan of every conversation. A deleted one stays in its place,
+ * marked, so a page's position holds.
  */
 export const CallerIndex = defineDocFamily<
-  { conversations: { conversation: string; agent: string }[] },
+  {
+    conversations: { conversation: string; agent: string; deleted?: true }[];
+  },
   null
 >({
   kind: "que-pasa.caller-index",

@@ -45,6 +45,7 @@ A process on the network that starts runs for whoever calls: for each request it
 | `GET /conversations?agent=&limit=&cursor=` | `POST /threads/search` | `{ items: [conversation], next? }`: the caller's ([[#Reading conversations]]) |
 | `GET /conversations/{conversation}` | `GET /threads/{id}` | how the conversation stands |
 | `PATCH /conversations/{conversation}`, body `{ title }` | `PATCH /threads/{id}` | how it stands, renamed |
+| `DELETE /conversations/{conversation}` | `DELETE /threads/{id}` | 204: the run going on stopped, then it is not found, and a run on its key makes a new one ([[que-pasa-loop#Reading a conversation]]) |
 | `POST /conversations/{conversation}/notes`, body `{ noteId, text }` | (none: OpenAI's message added to a thread) | `{ noteId, status: "placed", entry }`, or `{ noteId, status: "queued" }` while a run goes on: a note, which starts no run ([[que-pasa-loop#Conversation and run]]) |
 | `GET /conversations/{conversation}/entries?order=&minEntryId=&maxEntryId=&limit=&cursor=` | `GET /threads/{id}/state`, its messages | `{ items: [entry], next? }` |
 | `GET /conversations/{conversation}/runs?limit=&cursor=` | `GET /threads/{id}/runs` | `{ items: [run], next? }`, the newest admitted first |
@@ -96,7 +97,7 @@ What a client reads to show its conversations, such as a chat's list and a page 
 	- a client shows them with pi's `ConversationTranscript`, its loader a fetch of this route: it pages by entry ids and ends on no `next`, as it pages pi's own
 - a page: `{ items, next? }`, pi's `Page`; `next` is pi's cursor as base64url JSON, given back as `cursor` with the same query for the page after, and absent on the last page
 - the runs: each `{ runId, status, failure?, input?, joined?, steers, questions, entries? }`, LangGraph's run: `status` is `pending`, `running`, `interrupted`, `done`, `failed` or `stopped`; `entries` is its range in the conversation's entries, for the entries route; `questions` what its calls asked and the answers, a login's not answered with the deployment's `connectUrl` ([[que-pasa-loop#Reading a conversation]])
-- a read is the caller's: another caller's conversation, one no run made and one of an agent the caller is not given are the same, not found
+- a read is the caller's: another caller's conversation, one no run made, one deleted, and one of an agent the caller is not given are the same, not found
 
 ## The operations
 
@@ -107,6 +108,7 @@ The same, for a way in in the same process, such as a Slack app: each answers th
 	- `onKeepAlive`: called each second while the run goes on, for a client that must show it is alive, such as a progress bar
 - `update(request, conversation, { title })`: the rename, how it now stands
 - `note(request, conversation, { noteId, text })`: the note, as it stands
+- `delete(request, conversation)`: the delete
 - `conversations(request, { agent, limit, cursor })`, `conversation(request, conversation)`, `entries(request, conversation, { order, minEntryId, maxEntryId, limit, cursor })`, `runs(request, conversation, { limit, cursor })` and `runOf(request, conversation, runId)`: the reads, with pi's cursor as JSON, not as text
 - `stop(request, conversation, runId)`: the cancel, `{ stopped }`
 - a refusal throws `ServerError`, with the route's status and code
@@ -120,6 +122,7 @@ The same, for a way in in the same process, such as a Slack app: each answers th
 - from LangGraph: `steer` is pi's, with no LangGraph strategy; LangGraph's `interrupt` and `rollback`, which stop the run going on for the new input, are not built
 - from LangGraph: the list is the caller's, newest made first, with no search by metadata or values; a conversation's messages are pi's entries, paged, not the graph's state
 - from LangGraph: a note puts a message in a conversation with no run, as OpenAI's threads take a message apart from a run; LangGraph writes a thread with `update_state`, which sets the graph's state, not a message the next run reads
+- from LangGraph: a delete hides a conversation and frees its key, but its history stays in pi's storage, as pi has no erase; LangGraph removes the thread
 - from LangGraph: a conversation has a `title`, which a rename sets, and no metadata bag; LangGraph's thread has metadata, and its chat UI lists a thread by its first message
 - from LangGraph: a run streams through the chat surface, in the AI SDK's protocol, which chat frontends read, not LangGraph's `runs/stream`
 - not built: a run in the background with join, and crons: run life, each one more route

@@ -408,3 +408,55 @@ describe("a conversation's entries", () => {
     ).rejects.toBeInstanceOf(StorageRequestError);
   });
 });
+
+describe("a deleted conversation", () => {
+  it("leaves its caller's list and its key: every read is undefined, and a page of the rest is whole", async () => {
+    const runtime = await open();
+    for (const key of ["a", "b", "c"]) await answered(runtime, key);
+    expect(await runtime.delete("b")).toBe("deleted");
+    expect(await runtime.conversation("b")).toBeUndefined();
+    expect(await runtime.entries("b", {}, 10)).toBeUndefined();
+    expect(await runtime.runs("b")).toBeUndefined();
+    expect(await runtime.runOf("b", "1")).toBeUndefined();
+    expect(await runtime.watch("b")).toBeUndefined();
+    expect(
+      await runtime.note("b", { noteId: "n", text: "Gone?" }),
+    ).toBeUndefined();
+    const listed = await all((cursor) =>
+      runtime.conversations(owner, { limit: 1, ...(cursor ? { cursor } : {}) }),
+    );
+    expect(listed.map((each) => each.conversation)).toEqual(["c", "a"]);
+    expect(await runtime.delete("b")).toBeUndefined();
+    expect(await runtime.delete("none")).toBeUndefined();
+  });
+
+  it("stops the run going on first, and a run on its key makes a new conversation", async () => {
+    const runtime = await open();
+    holding = new Promise<void>((resolve) => (held = resolve));
+    faux.setResponses([calls("hold", "h")]);
+    const going = runtime.run(chat, "Hold.", {
+      conversation: "a",
+      runId: "1",
+      caller: owner,
+    });
+    await holding;
+    expect(await runtime.delete("a")).toBe("deleted");
+    await expect(going).rejects.toMatchObject({ reason: "stopped" });
+    faux.setResponses([says("Fresh.")]);
+    await expect(
+      runtime
+        .run(geo, "Start over.", {
+          conversation: "a",
+          runId: "1",
+          caller: owner,
+        })
+        .then(resultOf),
+    ).resolves.toBe("Fresh.");
+    expect(await runtime.conversation("a")).toMatchObject({
+      agent: "geo",
+      title: "Start over.",
+      status: "idle",
+    });
+    expect((await runtime.conversations(owner)).items).toHaveLength(1);
+  });
+});

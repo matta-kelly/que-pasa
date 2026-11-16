@@ -353,6 +353,13 @@ export type Runtime = {
     note: { noteId: string; text: string },
   ): Promise<NoteInfo | undefined>;
   /**
+   * Delete a conversation, as LangGraph's thread delete: the run going on is stopped first, with what is queued behind
+   * it; then the conversation leaves its caller's list and its key, so every read of the key is undefined and a run on
+   * it makes a new conversation. pi keeps no way to erase a conversation, so its history stays in storage, unread.
+   * Undefined when no run made it.
+   */
+  delete(key: string): Promise<"deleted" | undefined>;
+  /**
    * Stop a run, as a person asks it to. The run going on stops at once, with the steers that joined it and the runs
    * queued behind it, as pi's `abort()` does: nothing the person asked for goes on. A queued run alone is withdrawn,
    * and the rest go on. Kept before pi aborts it, so a crash between stops it too. A run that has ended stays as it
@@ -1002,8 +1009,8 @@ export async function openRuntime({
     const made =
       (await harness.snapshot(CallerIndex, caller.id, context))
         ?.conversations ?? [];
-    const of = ({ agent }: { agent: string }) =>
-      agents === undefined || agents.includes(agent);
+    const of = ({ agent, deleted }: { agent: string; deleted?: true }) =>
+      deleted === undefined && (agents === undefined || agents.includes(agent));
     // The list only grows, so a position in it is where a page ends: the newest first, from the end.
     let at = made.length;
     if (cursor !== undefined) {
@@ -1195,6 +1202,30 @@ export async function openRuntime({
     return index === -1 ? undefined : infoAt(index);
   }
 
+  async function remove(key: string) {
+    const id = await idOf(key);
+    if (id === undefined) return undefined;
+    const going = await runGoingOn(harness, id, context);
+    if (going !== undefined) await stop(key, going);
+    await harness.commit(async (tx) => {
+      const index = await tx.doc(ConversationIndex, key, null);
+      // Deleted already, or made again since: what this delete found is gone.
+      if (index.conversationId !== id) return;
+      const { caller } = await tx.doc(ConversationDoc, id);
+      const listed = await tx.doc(CallerIndex, caller.id, null);
+      const at = listed.conversations.findLastIndex(
+        (each) => each.conversation === key && each.deleted === undefined,
+      );
+      if (at !== -1)
+        listed.conversations[at] = {
+          ...listed.conversations[at]!,
+          deleted: true,
+        };
+      index.conversationId = null;
+    }, context);
+    return "deleted" as const;
+  }
+
   async function stop(key: string, runId: string) {
     const id = await idOf(key);
     if (id === undefined) return undefined;
@@ -1303,6 +1334,7 @@ export async function openRuntime({
     runOf,
     update,
     note,
+    delete: remove,
     stop,
     watch,
     async close() {
