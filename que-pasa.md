@@ -15,7 +15,6 @@ It takes LangChain's model and builds it on pi: their docs and paradigms are the
 - a [connection](https://docs.langchain.com/langsmith/python/managed-deep-agents-connections) holds a credential owned by the user or by the agent, and the runtime resolves the caller
 - [create_agent](https://docs.langchain.com/oss/python/langchain/agents.md): an agent is a small core, plus middleware
 
-- [[que-v2]]: the issue it is built for, and its open questions
 - [[que]]: the harness it replaces. que builds each person's agent at runtime from the plugins they can reach, one tool per op; que-pasa gives a workspace's tools to each team as agents made for its work, with access on top
 - `README.md`: how to run and check it, and how a project uses it
 
