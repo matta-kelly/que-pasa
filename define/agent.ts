@@ -20,6 +20,17 @@ export type Agent<
   tools: readonly Tool<z.ZodObject, C>[];
   /** The shape of its result. Left out, the agent answers in chat text. */
   output?: O;
+  /**
+   * The host's own check of a result that fits `output`, before it is taken: the problems with it, `[]` for none. A
+   * result with problems goes back to the model, as one that fails the schema does, with each problem to fix, and the
+   * run goes on. Past `maxRefused` refused submits in a run (counted by the process), the next result is taken as it
+   * is, so a run never loops on a fault its model can't fix: the host's own check after the run is still the verdict.
+   * It only reads.
+   */
+  accept?(
+    result: O extends z.ZodObject ? z.infer<O> : never,
+    run: { context: C },
+  ): Promise<readonly string[]>;
   /** Optional behaviours on its loop, in order: such as `memory`. */
   middleware?: readonly Middleware[];
 };

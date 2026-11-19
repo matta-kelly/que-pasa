@@ -35,6 +35,9 @@ export const submitTool = "submit";
 /** What a run says to an agent with an output that answered without calling submit. */
 export const reminder = `You have not given your result. Call ${submitTool} with it.`;
 
+/** How many submits a run's `accept` refuses before the next one is taken as it is. */
+export const maxRefused = 3;
+
 /** How many reminders a run sends before it ends with no result. */
 const reminders = 2;
 
@@ -63,7 +66,7 @@ export function agentExtension(
   const tools = given.map((tool) =>
     toPiTool(tool, agent.middleware ?? [], resources, event),
   );
-  if (output) tools.push(submit(output));
+  if (output) tools.push(submit(output, agent.accept));
   return defineExtension({
     name: extensionName(agent),
     tools,
@@ -216,17 +219,50 @@ function sectionOf(middleware: Middleware): PromptSection {
 }
 
 /** The submit tool: a result that fails the schema throws, and the model gets the error to try again. A good one is kept in the transcript, as the result's details, and ends the run. */
-function submit(output: z.ZodObject) {
+function submit(output: z.ZodObject, accept: AnyAgent["accept"]) {
+  // The submits `accept` refused, per run of a conversation, in this process: a restart counts again from none.
+  const refused = new Map<string, number>();
   return definePiTool({
     name: submitTool,
     description: "Give your final result. Call it once, when you are done.",
     parameters: jsonSchema(output),
     replay: "safe",
-    execute: async (args) => ({
-      output: [{ type: "text", text: "Result received." }],
-      details: output.parse(args) as Json,
-      control: { terminate: true },
-    }),
+    execute: async (args, api, context) => {
+      const result = output.parse(args) as Json;
+      if (accept) {
+        const live = await api.snapshot(LiveDoc, api.conversationId, context);
+        const run = `${api.conversationId} ${String(live?.run?.first)}`;
+        const times = refused.get(run) ?? 0;
+        if (times < maxRefused) {
+          const kept = await api.snapshot(
+            ConversationDoc,
+            api.conversationId,
+            context,
+          );
+          const problems = await accept(result as never, {
+            context: kept?.context,
+          });
+          if (problems.length) {
+            refused.set(run, times + 1);
+            return {
+              output: [
+                {
+                  type: "text",
+                  text: `Not taken. Fix each, then submit again:\n${problems.map((p) => `- ${p}`).join("\n")}`,
+                },
+              ],
+              isError: true,
+            };
+          }
+        }
+        refused.delete(run);
+      }
+      return {
+        output: [{ type: "text", text: "Result received." }],
+        details: result,
+        control: { terminate: true },
+      };
+    },
   });
 }
 

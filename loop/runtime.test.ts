@@ -30,6 +30,7 @@ import {
   type RunOptions,
   type RunUsage,
 } from "./index.ts";
+import { maxRefused } from "./extension.ts";
 import { reminder } from "./extension.ts";
 import { resultOf, scripted } from "./scripted.fixture.ts";
 
@@ -166,6 +167,82 @@ describe("a run", () => {
       note: "unclear",
     });
     expect(faux.state.callCount).toBe(2);
+  });
+
+  it("sends a result accept refuses back to the model with its problems, and takes the one it accepts", async () => {
+    const { faux, models, model } = scripted();
+    faux.setResponses([
+      fauxAssistantMessage(
+        [fauxToolCall("submit", { verdict: "done", note: "scratch.txt left" })],
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage(
+        [fauxToolCall("submit", { verdict: "done", note: "clean" })],
+        { stopReason: "toolUse" },
+      ),
+    ]);
+    const seen: { note: string; item: string }[] = [];
+    let answered = "";
+    const agent = defineAgent<typeof verdict, { item: string }>({
+      name: "judge",
+      model,
+      instructions: "Judge.",
+      tools: [],
+      output: verdict,
+      accept: (result, { context }) => {
+        seen.push({ note: result.note, item: context.item });
+        return Promise.resolve(
+          result.note === "clean" ? [] : ["scratch.txt is not in your change"],
+        );
+      },
+    });
+
+    await expect(
+      once(agent, "Judge this.", {
+        caller,
+        models,
+        context: { item: "x" },
+        onMessages: (messages) => {
+          answered = JSON.stringify(messages);
+        },
+      }),
+    ).resolves.toEqual({ verdict: "done", note: "clean" });
+    expect(seen).toEqual([
+      { note: "scratch.txt left", item: "x" },
+      { note: "clean", item: "x" },
+    ]);
+    expect(answered).toContain("scratch.txt is not in your change");
+    expect(faux.state.callCount).toBe(2);
+  });
+
+  it("takes a result as it is once accept has refused maxRefused submits in the run", async () => {
+    const { faux, models, model } = scripted();
+    faux.setResponses(
+      Array.from({ length: maxRefused + 1 }, (_, n) =>
+        fauxAssistantMessage(
+          [fauxToolCall("submit", { verdict: "done", note: `try ${n}` })],
+          { stopReason: "toolUse" },
+        ),
+      ),
+    );
+    let asked = 0;
+    const agent = defineAgent({
+      name: "judge",
+      model,
+      instructions: "Judge.",
+      tools: [],
+      output: verdict,
+      accept: () => {
+        asked++;
+        return Promise.resolve(["never good enough"]);
+      },
+    });
+
+    await expect(
+      once(agent, "Judge this.", { caller, models }),
+    ).resolves.toEqual({ verdict: "done", note: `try ${maxRefused}` });
+    expect(asked).toBe(maxRefused);
+    expect(faux.state.callCount).toBe(maxRefused + 1);
   });
 
   it("reminds an agent that answers in text instead of submitting", async () => {
