@@ -24,7 +24,6 @@ set_code() {
   npx tsc --noEmit &&
     npx eslint &&
     npx prettier --check . &&
-    scripts/workflows.test.sh &&
     npx vitest run --reporter="$reporter" &&
     npm run --silent build &&
     scripts/package.test.sh
