@@ -11,6 +11,12 @@ export type S3Options = {
   region: string;
   accessKeyId: string;
   secretAccessKey: string;
+  /**
+   * The folder in the bucket the store keeps its files under, for a bucket that other apps share: `landl-que` puts a
+   * file at `landl-que/conversations/<id>/<file id>`. Without one, the files are at the bucket's root. Its slashes at
+   * the start and end are dropped; an empty part (`/` alone, `a//b`), `.` or `..` is refused.
+   */
+  prefix?: string;
 };
 
 /**
@@ -24,7 +30,9 @@ export function s3Files({
   region,
   accessKeyId,
   secretAccessKey,
+  prefix,
 }: S3Options): FileStore {
+  const folder = prefixOf(prefix);
   const client = new AwsClient({
     accessKeyId,
     secretAccessKey,
@@ -33,7 +41,7 @@ export function s3Files({
   });
   const base = `${endpoint.replace(/\/+$/, "")}/${encodeURIComponent(bucket)}`;
   const urlOf = (key: string) =>
-    `${base}/${key.split("/").map(encodeURIComponent).join("/")}`;
+    `${base}/${(folder ? `${folder}/${key}` : key).split("/").map(encodeURIComponent).join("/")}`;
 
   async function failed(response: Response, what: string) {
     const body = await response.text().catch(() => "");
@@ -75,4 +83,15 @@ export function s3Files({
       };
     },
   };
+}
+
+/** The prefix without its slashes at the start and end, or undefined for none (`""` too); a bad one is refused. */
+function prefixOf(prefix: string | undefined) {
+  if (!prefix) return undefined;
+  const parts = prefix.replace(/^\/+|\/+$/g, "").split("/");
+  if (parts.some((part) => part === "" || part === "." || part === ".."))
+    throw new RangeError(
+      `s3Files: the prefix "${prefix}" has an empty part, "." or ".."`,
+    );
+  return parts.join("/");
 }

@@ -76,6 +76,20 @@ describe("folderFiles, its keys", () => {
   });
 });
 
+describe("s3Files, its prefix", () => {
+  const options = {
+    endpoint: "http://s3.invalid",
+    bucket: "b",
+    region: "r",
+    accessKeyId: "k",
+    secretAccessKey: "s",
+  };
+  it("refuses a prefix with an empty part, . or ..", () => {
+    for (const prefix of ["/", "a//b", ".", "a/../b", "a/./b"])
+      expect(() => s3Files({ ...options, prefix })).toThrow(RangeError);
+  });
+});
+
 // A real S3-compatible bucket, where podman is: the release's runner has it, the dev image does not.
 describe.runIf(hasPodman)("s3Files, on Garage", () => {
   let garage: Awaited<ReturnType<typeof startGarage>> | undefined;
@@ -84,6 +98,21 @@ describe.runIf(hasPodman)("s3Files, on Garage", () => {
   }, 120_000);
   afterAll(() => garage?.stop());
   conforms("put and get", () => s3Files(garage!));
+
+  conforms("put and get, under a prefix", () =>
+    s3Files({ ...garage!, prefix: "/app-one/" }),
+  );
+
+  it("keeps a prefixed store's files under its prefix, apart from the bucket's root", async () => {
+    const root = s3Files(garage!);
+    const app = s3Files({ ...garage!, prefix: "app-two/files" });
+    const file = { data: png, mediaType: "image/png", name: "a.png" } as const;
+    await app.put(fileKey(9, "p"), file);
+    expect(await root.get(`app-two/files/${fileKey(9, "p")}`)).toEqual(file);
+    expect(await root.get(fileKey(9, "p"))).toBeUndefined();
+    await root.put(fileKey(9, "q"), file);
+    expect(await app.get(fileKey(9, "q"))).toBeUndefined();
+  });
 
   it("refuses a request its keys do not sign", async () => {
     const store = s3Files({ ...garage!, secretAccessKey: "2".repeat(64) });
