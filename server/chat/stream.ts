@@ -110,15 +110,9 @@ export class MessageDiff {
         return toolChunks(from as DynamicToolUIPart | undefined, to);
       case "data-steer":
       case "data-note":
-        return from
-          ? []
-          : [
-              {
-                type: to.type,
-                ...(to.id === undefined ? {} : { id: to.id }),
-                data: to.data,
-              },
-            ];
+      case "data-compaction":
+        // A data part is its own chunk: sent once, when it first appears.
+        return from ? [] : [to];
       default:
         return [];
     }

@@ -9,6 +9,7 @@ import type {
 } from "@earendil-works/pi-ai";
 import {
   AssistantEntry,
+  CompactionEntry,
   type EntryRecord,
   type LiveState,
   ToolResultEntry,
@@ -19,12 +20,14 @@ import type { Json } from "../../define/index.ts";
 import { NoteEntry, type Question, type RunInfo } from "../../loop/index.ts";
 
 /**
- * The data parts a chat's messages carry: a steer, a message that joined the run while it went on; and a note, a message
- * put in the conversation for its runs to read, which started no run.
+ * The data parts a chat's messages carry: a steer, a message that joined the run while it went on; a note, a message
+ * put in the conversation for its runs to read, which started no run; and a compaction, the summary that took the place
+ * of the conversation's older part.
  */
 export type ChatDataParts = {
   steer: { text: string };
   note: { text: string };
+  compaction: { summary: string };
 };
 
 /** A chat's message: a frontend gives it to `useChat<ChatMessage>()` to type its parts. */
@@ -63,7 +66,7 @@ export function userMessageOf({
 /**
  * What the agent did for a run, as one assistant message: each model response a step, with its text, its reasoning
  * and its tool calls, each call carrying its question and its result; a steer where it joined; a note where it was
- * placed, during the run or after it; and, while the run goes on, the response being written. A response pi retried is left out, as the stream's `reset-step` removes it.
+ * placed, during the run or after it; a compaction where its summary was placed; and, while the run goes on, the response being written. A response pi retried is left out, as the stream's `reset-step` removes it.
  */
 export function assistantMessageOf({
   info,
@@ -92,6 +95,14 @@ export function assistantMessageOf({
           type: "data-note",
           id: entry.data.noteId,
           data: { text },
+        });
+    } else if (CompactionEntry.is(entry)) {
+      const summary = textOf(entry.model?.[0]?.content);
+      if (summary !== undefined)
+        parts.push({
+          type: "data-compaction",
+          id: String(entry.id),
+          data: { summary },
         });
     } else if (AssistantEntry.is(entry)) {
       const message = entry.model?.[0] as AssistantMessage | undefined;

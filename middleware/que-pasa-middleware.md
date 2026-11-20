@@ -1,6 +1,6 @@
 ---
 type: component
-description: "que-pasa's middleware: optional behaviours on an agent's loop, after LangChain's middleware, built on pi-durable's documents, prompt sections and que-pasa's tool calls, with memory and skills on it, after Deep Agents' MemoryMiddleware and SkillsMiddleware, and approval, after LangChain's HumanInTheLoopMiddleware. Read for what a middleware is, how each LangChain hook maps onto pi-durable, what memory and skills load and when, how approval asks, and where it differs from LangChain and Deep Agents."
+description: "que-pasa's middleware: optional behaviours on an agent's loop, after LangChain's middleware, built on pi-durable's documents, prompt sections and que-pasa's tool calls, with memory and skills on it, after Deep Agents' MemoryMiddleware and SkillsMiddleware, approval, after LangChain's HumanInTheLoopMiddleware, and compaction, after LangChain's SummarizationMiddleware. Read for what a middleware is, how each LangChain hook maps onto pi-durable, what memory and skills load and when, how approval asks, when compaction starts, and where it differs from LangChain and Deep Agents."
 status: running
 ---
 An optional behaviour on an agent's loop: a name and hooks, after LangChain's middleware. The primitive is `defineMiddleware` in `define/`; the loop runs its hooks; the middleware que-pasa ships are `middleware/`, exported as `@mku1tra/que-pasa/middleware`.
@@ -9,6 +9,7 @@ An optional behaviour on an agent's loop: a name and hooks, after LangChain's mi
 - [[#Memory]] files an agent always has in its context
 - [[#Skills]] folders of know-how an agent reads when a task matches one
 - [[#Approval]] a person decides on a tool call before it runs
+- [[#Compaction]] an agent's conversation summarized past the agent's own trigger
 - [[#Where it differs]] from LangChain and Deep Agents
 
 - [[que-pasa]]: the harness it is part of
@@ -25,8 +26,9 @@ An optional behaviour on an agent's loop: a name and hooks, after LangChain's mi
 - hooks, each optional:
 	- `beforeAgent(conversation)`: LangChain's `before_agent`. Once per conversation, when its first run makes it, from the conversation as it is made (`conversation`, `caller`, `context`). What it gives back is its state
 	- `systemPrompt(state)`: what LangChain's `wrap_model_call` does when it appends to the system message. Before each model request, from the state the conversation keeps. Its state is null when it has no `beforeAgent`, or the conversation was made before the agent had it
+	- `afterModel(response, api)`: LangChain's `after_model`. After each model response of the agent's runs, one that failed or was stopped left out: `response.contextTokens`, the tokens of the context with this response, counted as pi's own compaction threshold counts them (the provider's usage). `api.compacting` says whether a compaction goes on; `api.compact(instructions?)` asks for one, as `runtime.compact` does. It changes no message
 	- `wrapToolCall(request, handler)`: LangChain's `wrap_tool_call`. Around each call of the agent's tools, outermost first: it may ask a person with `request.interrupt(value, answer?)` before it calls `handler` ([[que-pasa-loop#The interrupt]]), call `handler(args)` with other arguments, or give a result of its own, a `ToolMessage` (`{ content, status }`), and not call it. `request` holds the call's `name`, `args`, `id`, `caller` and `context`
-- not built: LangChain's `before_model`, `after_model` and `after_agent`. They come as more optional hooks on the same type, with no break
+- not built: LangChain's `before_model` and `after_agent`, and an `afterModel` that changes the response. They come as more optional hooks on the same type, with no break
 
 ## The hooks on pi-durable
 
@@ -35,7 +37,8 @@ An optional behaviour on an agent's loop: a name and hooks, after LangChain's mi
 | `before_agent` → a state update | runs at the start, may load data | a document written in the commit that makes the conversation | `beforeAgent(conversation)`, its result kept in `MiddlewareDoc` |
 | state (`memory_contents`) | what a middleware keeps | a conversation document family | `MiddlewareDoc`, one per middleware, by its name |
 | `wrap_model_call` → `append_to_system_message` | adds to the system prompt on each call | a prompt section of the agent's extension, rendered from committed documents before each request | `systemPrompt(state)`, a section keyed `middleware-<name>` |
-| `before_model`, `after_model` | change the request, read the answer | `beforeRequest`, `afterResponse` | not built |
+| `before_model` | change the request | `beforeRequest` | not built |
+| `after_model` | read the answer, update the state | `afterResponse`, a hook of the agent's extension, so it runs only in the agent's conversations | `afterModel(response, api)`: reads the context's tokens, may ask for a compaction |
 | `wrap_tool_call` | around each tool call: approval, limits | que-pasa's tool call, which pi runs as one replay-safe call: a question kept in the run's document, a marker before the tool's code | `wrapToolCall(request, handler)` |
 | middleware `tools` | tools the middleware brings | tools of the agent's extension | `tools`, after the agent's own |
 | `interrupt()`, `Command(resume)` | stop, ask a person, go on with the answer | none: its tasks wait only on tasks, or until a time | `request.interrupt(value, answer?)`, answered by `runtime.run(agent, { resume })` |
@@ -86,6 +89,15 @@ An optional behaviour on an agent's loop: a name and hooks, after LangChain's mi
 - a run nobody attends fails at a gated call, `needs_answer`, before the tool acts
 - who decides, and how the question reaches them, is the deployment's: the server gives it as `interrupted` ([[que-pasa-server]])
 
+## Compaction
+
+`compaction({ trigger, instructions })` (`middleware/compaction.ts`): an agent's conversation is compacted once its context passes the agent's own trigger, after LangChain's `SummarizationMiddleware`. pi does the compacting, as `runtime.compact` asks it ([[que-pasa-loop#Conversation and run]]): it summarizes the older part and keeps the recent part.
+- `trigger`: `{ tokens }`, LangChain's: a whole number, 1 or more, refused at definition otherwise. Past it, after a model response, a compaction is asked for, unless one goes on
+- `instructions`: what the summary keeps, given to pi's summarizer
+- per agent: on the agent that wants it, in its `middleware` list, so each agent has its own trigger, also two agents on one model. Left out, the agent keeps pi's own threshold, near its model's whole window, which stays as the backstop for every agent
+- when: after the response that passes the trigger. pi summarizes while the run goes on, and places the summary at the run's next step, or once written when the run has ended, so the request after that response still sends the whole context
+- what pi keeps as it is: its `keepRecentTokens`, 20k tokens of the newest context, the same for every agent: pi sets it per harness or per model, not per conversation
+
 ## Where it differs
 
 - from LangChain: a hook's state is the conversation's, in pi-durable's storage, not a graph's state. `before_agent` runs once per conversation, not on each run: Deep Agents' memory and skills skip their load when the thread has it, so the result is the same. A `beforeAgent` per run is not built
@@ -95,5 +107,6 @@ An optional behaviour on an agent's loop: a name and hooks, after LangChain's mi
 - from Deep Agents: `add_cache_control` is not needed: pi keeps an unchanged section cached by itself
 - from Deep Agents: skills brings its own read-only `ls` and `read_file`, where Deep Agents relies on the agent's file tools; an agent with its own keeps them. Its prompt points at the paths shown, from the backend's root, not at absolute paths, and leaves out its CLI's sentence on source labels and its part on running a skill's scripts, which needs `execute`
 - from Deep Agents: a skill's sources load once per conversation; Deep Agents reloads when a thread's state asks for it. A reload is not built
+- from LangChain: compaction is pi's summary, placed as an entry whose `head` starts the context, and the history stays whole, where `SummarizationMiddleware` removes the summarized messages from the thread's state. Its `trigger` takes `tokens` only, not `messages` or `fraction`; its `keep` is pi's, the same for every agent; its summarizer is pi's, on the conversation's model, not a `model` of its own. It runs after the response that passes the trigger, not before the next request, so it never holds a request back
 - from LangChain: approval asks per call, as its `per_call` mode, not once per model turn for every gated call (its `batched` mode). A run gives back every question it waits on together, so a person sees a turn's calls at once
 - from LangChain: a `wrapToolCall` asks only before it calls `handler`; after the tool starts, `interrupt` throws. LangGraph reruns a node from its top on every resume; que-pasa goes on at the waiting call, and reruns it up to its question only after a restart, so what a call does before it asks must be safe to do again, and the tool has not run

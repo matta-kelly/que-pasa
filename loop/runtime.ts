@@ -52,6 +52,7 @@ import { ConnectionsMissing, RunFailed, RunRefused } from "./errors.ts";
 import {
   type AnyAgent,
   agentExtension,
+  compacting,
   connectionsOf,
   submitTool,
   toolsOf,
@@ -179,6 +180,12 @@ export type RunInfo = {
 export type NoteInfo = { noteId: string } & (
   { status: "placed"; entry: EntryId } | { status: "queued" }
 );
+
+/**
+ * A compaction asked for: it goes on, the one asked for now or one already going, and its summary lands in the
+ * conversation as pi's compaction entry.
+ */
+export type CompactInfo = { status: "compacting" };
 
 /** A question a run's call asked, and its answer once given. */
 export type Question = Interrupt & { answer?: Json };
@@ -353,6 +360,16 @@ export type Runtime = {
     note: { noteId: string; text: string },
   ): Promise<NoteInfo | undefined>;
   /**
+   * Compact a conversation now, pi's `compact()`: pi summarizes its older part and keeps its recent part, while the
+   * conversation works. On an idle conversation the summary is placed when it is written; while a run goes on, at that
+   * run's next step. `instructions` say what the summary keeps. While a compaction goes on, none more is started. Starts
+   * no run. Undefined when no run made the conversation.
+   */
+  compact(
+    key: string,
+    options?: { instructions?: string },
+  ): Promise<CompactInfo | undefined>;
+  /**
    * Delete a conversation, as LangGraph's thread delete: the run going on is stopped first, with what is queued behind
    * it; then the conversation leaves its caller's list and its key, so every read of the key is undefined and a run on
    * it makes a new conversation. pi keeps no way to erase a conversation, so its history stays in storage, unread.
@@ -424,7 +441,13 @@ export async function openRuntime({
   for (const agent of agents) {
     installed.set(agent.name, {
       agent,
-      extension: agentExtension(agent, resources, tracing.toolEvent, started),
+      extension: agentExtension(
+        agent,
+        resources,
+        tracing.toolEvent,
+        started,
+        compactById,
+      ),
     });
   }
   const registry = createRegistry();
@@ -986,6 +1009,46 @@ export async function openRuntime({
     );
   }
 
+  async function compact(
+    key: string,
+    { instructions }: { instructions?: string } = {},
+  ): Promise<CompactInfo | undefined> {
+    const id = await idOf(key);
+    if (id === undefined) return undefined;
+    await compactById(id, instructions?.trim() || undefined, context);
+    return { status: "compacting" };
+  }
+
+  /**
+   * The compactions this process is starting, by conversation: one asked for while another starts waits for it, so
+   * the check of pi's list and the start are one step.
+   */
+  const starting = new Map<ConversationId, Promise<boolean>>();
+
+  /** Start pi's compaction of a conversation, unless one goes on: whether it started one. */
+  function compactById(
+    id: ConversationId,
+    instructions: string | undefined,
+    within: Context,
+  ): Promise<boolean> {
+    const before = starting.get(id) ?? Promise.resolve(false);
+    const next = before
+      .catch(() => false)
+      .then(async () => {
+        if (await compacting(harness, id, within)) return false;
+        const conversation = await harness.conversation(id, within);
+        if (!conversation)
+          throw new Error(`conversation ${String(id)}: it is missing`);
+        await conversation.compact(instructions, within);
+        return true;
+      });
+    starting.set(id, next);
+    void next.finally(() => {
+      if (starting.get(id) === next) starting.delete(id);
+    });
+    return next;
+  }
+
   async function entries(
     key: string,
     query: Omit<EntryQuery, "conversationId">,
@@ -1334,6 +1397,7 @@ export async function openRuntime({
     runOf,
     update,
     note,
+    compact,
     delete: remove,
     stop,
     watch,

@@ -14,6 +14,7 @@ export {
   type Provider,
 } from "./resources.ts";
 export {
+  type CompactInfo,
   type ConversationInfo,
   type ConversationsOptions,
   type ConversationStatus,

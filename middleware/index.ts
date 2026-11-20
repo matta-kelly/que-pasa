@@ -1,3 +1,4 @@
+export { compaction, type Trigger } from "./compaction.ts";
 export {
   type ApprovalQuestion,
   type Decision,

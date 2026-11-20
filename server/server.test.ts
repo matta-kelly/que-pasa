@@ -716,6 +716,46 @@ describe("the server's history routes", () => {
     ).resolves.toMatchObject({ noteId: "n4", status: "placed" });
   });
 
+  it("compact one of the caller's conversations, starting no run; with or without a body, a bad body is 400, another caller's is not found", async () => {
+    const server = await serve();
+    await answered(server, "a");
+    const post = (body: string, caller = "owner") =>
+      server.fetch(
+        new Request("http://que/conversations/a/compact", {
+          method: "POST",
+          headers: { ...as(caller), "content-type": "application/json" },
+          body,
+        }),
+      );
+    const runsBefore = (
+      await (await get(server, "/conversations/a/runs")).json()
+    ).items.length;
+    for (const body of ["", JSON.stringify({ instructions: "Keep names." })]) {
+      const compacted = await post(body);
+      expect(compacted.status).toBe(202);
+      expect(await compacted.json()).toEqual({ status: "compacting" });
+    }
+    expect(
+      (await (await get(server, "/conversations/a/runs")).json()).items,
+    ).toHaveLength(runsBefore);
+    for (const body of [
+      "not json",
+      JSON.stringify({ instructions: 1 }),
+      JSON.stringify({ other: 1 }),
+    ]) {
+      const bad = await post(body);
+      expect([bad.status, await errorOf(bad)]).toEqual([400, "bad_request"]);
+    }
+    const hidden = await post("", "stranger");
+    expect([hidden.status, await errorOf(hidden)]).toEqual([
+      404,
+      "conversation_not_found",
+    ]);
+    await expect(
+      server.compact(new Request("http://que/", { headers: as("owner") }), "a"),
+    ).resolves.toEqual({ status: "compacting" });
+  });
+
   it("read a conversation that waits on a login: the run to answer on, and its question with the deployment's page", async () => {
     logins.clear();
     const server = await serve({

@@ -47,6 +47,7 @@ A process on the network that starts runs for whoever calls: for each request it
 | `PATCH /conversations/{conversation}`, body `{ title }` | `PATCH /threads/{id}` | how it stands, renamed |
 | `DELETE /conversations/{conversation}` | `DELETE /threads/{id}` | 204: the run going on stopped, then it is not found, and a run on its key makes a new one ([[que-pasa-loop#Reading a conversation]]) |
 | `POST /conversations/{conversation}/notes`, body `{ noteId, text }` | (none: OpenAI's message added to a thread) | `{ noteId, status: "placed", entry }`, or `{ noteId, status: "queued" }` while a run goes on: a note, which starts no run ([[que-pasa-loop#Conversation and run]]) |
+| `POST /conversations/{conversation}/compact`, body `{ instructions? }` or none | (none: pi's `compact()`) | 202 `{ status: "compacting" }`: pi summarizes the conversation's older part, and starts no run ([[que-pasa-loop#Conversation and run]]) |
 | `GET /conversations/{conversation}/entries?order=&minEntryId=&maxEntryId=&limit=&cursor=` | `GET /threads/{id}/state`, its messages | `{ items: [entry], next? }` |
 | `GET /conversations/{conversation}/runs?limit=&cursor=` | `GET /threads/{id}/runs` | `{ items: [run], next? }`, the newest admitted first |
 | `GET /conversations/{conversation}/runs/{runId}` | `GET /threads/{id}/runs/{run_id}` | how the run stands |
@@ -57,12 +58,13 @@ A process on the network that starts runs for whoever calls: for each request it
 - `conversation`: the client's key, any non-empty string, URL-encoded in the path. `runId`: the client's, so the same one again is the same run and gives back its outcome. `input`: one text message, as every agent takes
 - `whenBusy`: what the input does when a run goes on, or waits, on the conversation, pi's ([[que-pasa-loop#Conversation and run]]): `reject`, the default, answers 422 `busy`; `followUp` queues it, and answers its own outcome once the runs before it end; `steer` joins it to the run going on, and answers that run's outcome. LangGraph's `multitask_strategy`: `reject` is its default, `enqueue` is `followUp`, and it has no steer
 - `noteId`: the client's key for a note, so the same note sent again is placed once. `text`: what the conversation's runs read, as a user message
+- `instructions`: what a compaction's summary keeps. While a compaction goes on, a compact starts none more, and answers the same
 - `command.resume`: answers to the run's questions, by their ids, on the run's own `runId`, in place of `input`: LangGraph's `Command(resume)`. The run goes on at the calls that asked
 - a refusal comes before anything is done, and before a run is admitted, as a status with `{ error: { code, message } }`:
 
 | Status | Code | When |
 |---|---|---|
-| 400 | `bad_request` | the body is not `{ agent, runId, input, whenBusy? }` or `{ agent, runId, command: { resume } }`; a rename's body is not `{ title }` with 1 to 200 characters once trimmed; a note's body is not `{ noteId, text }` with a text of 1 character or more once trimmed; a read's query string has a field it does not take, a `limit` not 1 to 100, or a `cursor` that is not a page's `next` of the same query |
+| 400 | `bad_request` | the body is not `{ agent, runId, input, whenBusy? }` or `{ agent, runId, command: { resume } }`; a rename's body is not `{ title }` with 1 to 200 characters once trimmed; a note's body is not `{ noteId, text }` with a text of 1 character or more once trimmed; a compact's body is not empty or `{ instructions? }`; a read's query string has a field it does not take, a `limit` not 1 to 100, or a `cursor` that is not a page's `next` of the same query |
 | 401 | `unauthenticated` | `authenticate` gave no caller |
 | 403 | `forbidden` | a hook threw `Refused` |
 | 404 | `agent_not_found` | an agent not given to the caller, or none of that name |
@@ -108,6 +110,7 @@ The same, for a way in in the same process, such as a Slack app: each answers th
 	- `onKeepAlive`: called each second while the run goes on, for a client that must show it is alive, such as a progress bar
 - `update(request, conversation, { title })`: the rename, how it now stands
 - `note(request, conversation, { noteId, text })`: the note, as it stands
+- `compact(request, conversation, { instructions })`: the compaction asked for, `{ status: "compacting" }`
 - `delete(request, conversation)`: the delete
 - `conversations(request, { agent, limit, cursor })`, `conversation(request, conversation)`, `entries(request, conversation, { order, minEntryId, maxEntryId, limit, cursor })`, `runs(request, conversation, { limit, cursor })` and `runOf(request, conversation, runId)`: the reads, with pi's cursor as JSON, not as text
 - `stop(request, conversation, runId)`: the cancel, `{ stopped }`
@@ -122,6 +125,7 @@ The same, for a way in in the same process, such as a Slack app: each answers th
 - from LangGraph: `steer` is pi's, with no LangGraph strategy; LangGraph's `interrupt` and `rollback`, which stop the run going on for the new input, are not built
 - from LangGraph: the list is the caller's, newest made first, with no search by metadata or values; a conversation's messages are pi's entries, paged, not the graph's state
 - from LangGraph: a note puts a message in a conversation with no run, as OpenAI's threads take a message apart from a run; LangGraph writes a thread with `update_state`, which sets the graph's state, not a message the next run reads
+- from LangGraph: a compact summarizes a conversation on request, pi's; LangGraph has no route for it, and a client writes a summary into the thread's state itself
 - from LangGraph: a delete hides a conversation and frees its key, but its history stays in pi's storage, as pi has no erase; LangGraph removes the thread
 - from LangGraph: a conversation has a `title`, which a rename sets, and no metadata bag; LangGraph's thread has metadata, and its chat UI lists a thread by its first message
 - from LangGraph: a run streams through the chat surface, in the AI SDK's protocol, which chat frontends read, not LangGraph's `runs/stream`

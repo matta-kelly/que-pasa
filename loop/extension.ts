@@ -1,4 +1,5 @@
 import type { Context } from "@earendil-works/chord/context";
+import { calculateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import {
   type ConversationId,
   type DocumentReader,
@@ -55,6 +56,7 @@ export function agentExtension(
   resources: Resources,
   event: ToolEvent,
   started: Started,
+  compact: Compact,
 ): Extension {
   const { output } = agent;
   const given = toolsOf(agent);
@@ -78,7 +80,13 @@ export function agentExtension(
         ? [identitySection(agent)]
         : []),
     ],
-    hooks: [start(started), ...(output ? [remind] : [])],
+    hooks: [
+      start(started),
+      ...(output ? [remind] : []),
+      ...(agent.middleware ?? []).flatMap((middleware) =>
+        middleware.afterModel ? [afterModel(middleware, compact)] : [],
+      ),
+    ],
   });
 }
 
@@ -191,6 +199,46 @@ const start = (started: Started) =>
     beforeRequest: async (_request, api) => {
       await started(api.conversationId, api);
       return undefined;
+    },
+  });
+
+/**
+ * Compact a conversation, as the runtime's `compact` does: none started while one goes on. Whether it started one.
+ */
+export type Compact = (
+  id: ConversationId,
+  instructions: string | undefined,
+  context: Context,
+) => Promise<boolean>;
+
+/** Whether a compaction of the conversation goes on: asked for, or pi's own. */
+export async function compacting(
+  reader: DocumentReader,
+  id: ConversationId,
+  context: Context,
+) {
+  const live = await reader.snapshot(LiveDoc, id, context);
+  return (live?.compactions?.length ?? 0) > 0;
+}
+
+/**
+ * A middleware's `afterModel`, on pi's `afterResponse`: after each response the model gave, with the context's tokens
+ * counted as pi's own compaction threshold counts them. A response that failed or was stopped is not given.
+ */
+const afterModel = (middleware: Middleware, compact: Compact) =>
+  hook(GenerationTask, {
+    afterResponse: async (message, api, context) => {
+      if (message.stopReason === "error" || message.stopReason === "aborted")
+        return;
+      await middleware.afterModel?.(
+        { contextTokens: calculateContextTokens(message.usage) },
+        {
+          compacting: await compacting(api, api.conversationId, context),
+          compact: async (instructions) => {
+            await compact(api.conversationId, instructions, context);
+          },
+        },
+      );
     },
   });
 

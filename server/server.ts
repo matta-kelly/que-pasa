@@ -27,6 +27,7 @@ import {
   type ConnectionQuestion,
   type ConversationInfo as Kept,
   type NoteInfo,
+  type CompactInfo,
   type RunInfo,
   RunFailed,
   RunRefused,
@@ -209,6 +210,16 @@ export type Server = {
     note: { noteId: string; text: string },
   ) => Promise<NoteInfo>;
   /**
+   * Compact one of the caller's conversations now, starting no run: pi summarizes its older part, placed when written
+   * on an idle conversation, at the run's next step while one goes on. `instructions` say what the summary keeps. While
+   * a compaction goes on, none more is started.
+   */
+  compact: (
+    request: Request,
+    conversation: string,
+    options?: { instructions?: string },
+  ) => Promise<CompactInfo>;
+  /**
    * Delete one of the caller's conversations, as LangGraph's thread delete: the run going on is stopped first, then it
    * is read as not found, and a run on its key makes a new one. Its history stays in pi's storage, unread.
    */
@@ -265,6 +276,9 @@ const NoteBody = z.strictObject({
   noteId: z.string().min(1),
   text: z.string(),
 });
+
+/** A compaction asked for: what the summary keeps, if anything in particular. */
+const CompactBody = z.strictObject({ instructions: z.string().optional() });
 
 /** The query string of the runs route. */
 const RunsParams = z.strictObject({ limit: Limit, cursor: CursorParam });
@@ -576,6 +590,16 @@ export function createServer({
     }
   }
 
+  async function compact(
+    request: Request,
+    key: string,
+    options: { instructions?: string } = {},
+  ) {
+    await readable(request, key);
+    // Readable, so made: a conversation is never removed.
+    return (await runtime.compact(key, options))!;
+  }
+
   async function remove(request: Request, key: string) {
     await readable(request, key);
     await runtime.delete(key);
@@ -678,6 +702,21 @@ export function createServer({
       throw new ServerError(400, "bad_request", z.prettifyError(body.error));
     return c.json(
       await note(c.req.raw, c.req.param("conversation"), body.data),
+    );
+  });
+  app.post("/conversations/:conversation/compact", async (c) => {
+    // Its body is optional: none asks for a compaction with no instructions.
+    const text = await c.req.text();
+    const body = CompactBody.safeParse(text.trim() === "" ? {} : jsonOf(text));
+    if (!body.success)
+      throw new ServerError(400, "bad_request", z.prettifyError(body.error));
+    return c.json(
+      await compact(
+        c.req.raw,
+        c.req.param("conversation"),
+        dropUndefined(body.data),
+      ),
+      202,
     );
   });
   app.get("/conversations/:conversation/runs", async (c) =>
@@ -819,12 +858,22 @@ export function createServer({
     conversation,
     update,
     note,
+    compact,
     delete: remove,
     entries,
     runs,
     runOf,
     stop,
   };
+}
+
+/** The value of a JSON text, or undefined when it is not JSON. */
+function jsonOf(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
 }
 
 /** An object without its undefined fields, as the operations take their options. */

@@ -39,6 +39,7 @@ A run is two messages: its input as the user message, by its `runId`, and everyt
 - a steer, a message that joined the run while it went on: a `data-steer` part where it joined, `{ text }`, by the steer's run id
 	- the AI SDK's own `steering-message` part is experimental and newer than the `ai` que-pasa pins (7.0.157), and a client reading a chunk it does not know fails: a data part is read by every version
 - a note, a message put in the conversation that started no run ([[que-pasa-loop#Conversation and run]]): a `data-note` part where it was placed, `{ text }`, by its note id; in the run it was placed in, or, placed while the conversation was idle, in the run before it. The chat sends none: a chat message is a run; a note comes from the HTTP API or the operations
+- a compaction, pi's summary of the conversation's older part ([[que-pasa-loop#Conversation and run]]): a `data-compaction` part where it was placed, `{ summary }`, by its entry's id; by hand, by an agent's trigger, or pi's own. The chat asks for none: a compaction comes from the HTTP API, the operations, or the middleware
 - the response being written, while the run goes on: a step after the others, from pi's `pi.live`, which pi commits every 100 ms
 - not shown: the system entries, a harness's reminders to the model, and a response pi retried (its error entry), as the stream removes it
 - a run still queued: its user message only, from pi's inbox

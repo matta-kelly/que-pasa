@@ -9,8 +9,9 @@ import type { Tool } from "./tool.ts";
  *
  * Its hooks are methods, so a middleware of any state goes in an agent's list of `Middleware`.
  *
- * Built: `beforeAgent` and `systemPrompt`, which memory needs, `wrapToolCall`, which approvals need, and `tools`, which
- * skills need. LangChain's others (`before_model`, `after_model`, `after_agent`) are not built yet.
+ * Built: `beforeAgent` and `systemPrompt`, which memory needs, `wrapToolCall`, which approvals need, `tools`, which
+ * skills need, and `afterModel`, which compaction needs. LangChain's others (`before_model`, `after_agent`) are not
+ * built yet.
  */
 export type Middleware<S extends Json = Json> = {
   /** kebab-case, and one per agent: the key of the state it keeps. */
@@ -41,6 +42,28 @@ export type Middleware<S extends Json = Json> = {
     request: ToolCallRequest,
     handler: ToolCallHandler,
   ): Promise<ToolMessage>;
+  /**
+   * LangChain's `after_model`: after each model response of the agent's runs, with what the response used. It may ask
+   * for the conversation to be compacted, and nothing else: it changes no message. A throw fails the run.
+   */
+  afterModel?(response: ModelResponse, api: ModelApi): void | Promise<void>;
+};
+
+/** A model response, as a middleware's `afterModel` gets it. */
+export type ModelResponse = {
+  /** The tokens of the conversation's context with this response: what its next request sends, before new input. */
+  contextTokens: number;
+};
+
+/** What a middleware's `afterModel` can do to the conversation. */
+export type ModelApi = {
+  /** Whether a compaction of the conversation goes on: asked for, or pi's own. */
+  compacting: boolean;
+  /**
+   * Compact the conversation: pi summarizes its older part and keeps its recent part, placed at the run's next step.
+   * `instructions` say what the summary keeps. Starts none while one goes on.
+   */
+  compact(instructions?: string): Promise<void>;
 };
 
 /** One call of a tool, as a middleware's `wrapToolCall` gets it. */

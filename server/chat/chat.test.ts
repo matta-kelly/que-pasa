@@ -4,8 +4,14 @@ import {
   fauxProvider,
   fauxText,
   fauxToolCall,
+  type Message,
 } from "@earendil-works/pi-ai";
-import { MemoryStorage } from "@earendil-works/pi-durable";
+import {
+  CompactionEntry,
+  type EntryRecord,
+  MemoryStorage,
+  UserEntry,
+} from "@earendil-works/pi-durable";
 import {
   DefaultChatTransport,
   readUIMessageStream,
@@ -17,7 +23,11 @@ import { defineAgent, defineTool } from "../../define/index.ts";
 import { openRuntime, type Runtime } from "../../loop/index.ts";
 import { humanInTheLoop } from "../../middleware/index.ts";
 import { createServer, type Server } from "../index.ts";
-import type { ChatMessage, ChatPart } from "./message.ts";
+import {
+  assistantMessageOf,
+  type ChatMessage,
+  type ChatPart,
+} from "./message.ts";
 import { MessageDiff } from "./stream.ts";
 
 /** A model that writes its answers a few characters at a time, so an answer streams in more than one piece. */
@@ -493,6 +503,39 @@ describe("the chat surface, with the AI SDK's own client", () => {
         { type: "data-note", id: "n2", data: { text: "Re-read the type." } },
       ],
     );
+  });
+
+  it("shows a compaction where its summary was placed, as a data part", () => {
+    const entry = (id: number, kind: string, model: Message[]) =>
+      ({ id, conversationId: 1, kind, model }) as unknown as EntryRecord;
+    const message = assistantMessageOf({
+      info: { runId: "m1", status: "done", steers: [], questions: [] },
+      entries: [
+        entry(1, UserEntry.kind, [
+          { role: "user", content: "Write.", timestamp: 0 },
+        ]),
+        entry(2, CompactionEntry.kind, [
+          {
+            role: "user",
+            content: "<summary>\nSummary.\n</summary>",
+            timestamp: 0,
+          },
+        ]),
+      ],
+    });
+    expect(message.parts).toEqual([
+      {
+        type: "data-compaction",
+        id: "2",
+        data: { summary: "<summary>\nSummary.\n</summary>" },
+      },
+    ]);
+    const chunks = new MessageDiff("m1:answer").next(message.parts);
+    expect(chunks).toContainEqual({
+      type: "data-compaction",
+      id: "2",
+      data: { summary: "<summary>\nSummary.\n</summary>" },
+    });
   });
 });
 

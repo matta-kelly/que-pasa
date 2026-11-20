@@ -10,6 +10,8 @@ export {
 export {
   defineMiddleware,
   type Middleware,
+  type ModelApi,
+  type ModelResponse,
   type ToolCallHandler,
   type ToolCallRequest,
   type ToolMessage,
