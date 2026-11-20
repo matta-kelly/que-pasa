@@ -17,7 +17,17 @@ export {
   type ToolMessage,
 } from "./middleware.ts";
 export { defineResource, type Resource } from "./resource.ts";
-export { defineTool, type Tool } from "./tool.ts";
+export {
+  defineTool,
+  type FileRef,
+  type ImageType,
+  imageTypes,
+  isWithImages,
+  type Tool,
+  type ToolImage,
+  type WithImages,
+  withImages,
+} from "./tool.ts";
 export type {
   Caller,
   ConversationOf,

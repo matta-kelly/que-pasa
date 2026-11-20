@@ -48,6 +48,7 @@ A process on the network that starts runs for whoever calls: for each request it
 | `DELETE /conversations/{conversation}` | `DELETE /threads/{id}` | 204: the run going on stopped, then it is not found, and a run on its key makes a new one ([[que-pasa-loop#Reading a conversation]]) |
 | `POST /conversations/{conversation}/notes`, body `{ noteId, text }` | (none: OpenAI's message added to a thread) | `{ noteId, status: "placed", entry }`, or `{ noteId, status: "queued" }` while a run goes on: a note, which starts no run ([[que-pasa-loop#Conversation and run]]) |
 | `POST /conversations/{conversation}/compact`, body `{ instructions? }` or none | (none: pi's `compact()`) | 202 `{ status: "compacting" }`: pi summarizes the conversation's older part, and starts no run ([[que-pasa-loop#Conversation and run]]) |
+| `GET /conversations/{conversation}/files/{file}` | (none: OpenAI's and Anthropic's file download) | an image a tool of the conversation made, by the id its link gives: its bytes, with its type, `inline` with its name, `private` and cached for good, as a file never changes ([[que-pasa-files]]) |
 | `GET /conversations/{conversation}/entries?order=&minEntryId=&maxEntryId=&limit=&cursor=` | `GET /threads/{id}/state`, its messages | `{ items: [entry], next? }` |
 | `GET /conversations/{conversation}/runs?limit=&cursor=` | `GET /threads/{id}/runs` | `{ items: [run], next? }`, the newest admitted first |
 | `GET /conversations/{conversation}/runs/{runId}` | `GET /threads/{id}/runs/{run_id}` | how the run stands |
@@ -69,6 +70,7 @@ A process on the network that starts runs for whoever calls: for each request it
 | 403 | `forbidden` | a hook threw `Refused` |
 | 404 | `agent_not_found` | an agent not given to the caller, or none of that name |
 | 404 | `conversation_not_found` | another caller's conversation, shown as not found; on a read, also one no run made, or one of an agent the caller is no longer given |
+| 404 | `file_not_found` | an image the conversation's tools never made, by that id |
 | 404 | `run_not_found` | a run the conversation never admitted, read or stopped |
 | 409 | `other_agent`, `other_context` | the conversation was made with another agent, or another context |
 | 409 | `not_interrupted` | answers to a question the run does not wait on, or to a run never started or ended |
@@ -111,6 +113,7 @@ The same, for a way in in the same process, such as a Slack app: each answers th
 - `update(request, conversation, { title })`: the rename, how it now stands
 - `note(request, conversation, { noteId, text })`: the note, as it stands
 - `compact(request, conversation, { instructions })`: the compaction asked for, `{ status: "compacting" }`
+- `file(request, conversation, id)`: an image, `{ data, mediaType, name }`
 - `delete(request, conversation)`: the delete
 - `conversations(request, { agent, limit, cursor })`, `conversation(request, conversation)`, `entries(request, conversation, { order, minEntryId, maxEntryId, limit, cursor })`, `runs(request, conversation, { limit, cursor })` and `runOf(request, conversation, runId)`: the reads, with pi's cursor as JSON, not as text
 - `stop(request, conversation, runId)`: the cancel, `{ stopped }`

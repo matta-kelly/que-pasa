@@ -7,6 +7,8 @@ export {
 export { type ConnectionQuestion } from "./call.ts";
 export { reminder, submitTool } from "./extension.ts";
 export { NoteEntry } from "./state.ts";
+export { filesOf } from "./transcript.ts";
+export { maxImageBytes } from "./call.ts";
 export {
   type ConversationOf,
   type CredentialFor,

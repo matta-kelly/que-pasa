@@ -17,7 +17,12 @@ import {
 } from "@earendil-works/pi-durable";
 import type { DynamicToolUIPart, UIMessage } from "ai";
 import type { Json } from "../../define/index.ts";
-import { NoteEntry, type Question, type RunInfo } from "../../loop/index.ts";
+import {
+  filesOf,
+  NoteEntry,
+  type Question,
+  type RunInfo,
+} from "../../loop/index.ts";
 
 /**
  * The data parts a chat's messages carry: a steer, a message that joined the run while it went on; a note, a message
@@ -43,6 +48,8 @@ export type RunTranscript = {
   entries: readonly EntryRecord[];
   /** pi's live state, when it is the run going on: the answer being written. */
   live?: LiveState;
+  /** Where a client fetches an image a tool made, by its id: the server's file route. */
+  fileUrl: (fileId: string) => string;
 };
 
 /** The id of a run's assistant message: stable, so a replay replaces the message it continues. */
@@ -66,12 +73,14 @@ export function userMessageOf({
 /**
  * What the agent did for a run, as one assistant message: each model response a step, with its text, its reasoning
  * and its tool calls, each call carrying its question and its result; a steer where it joined; a note where it was
- * placed, during the run or after it; a compaction where its summary was placed; and, while the run goes on, the response being written. A response pi retried is left out, as the stream's `reset-step` removes it.
+ * placed, during the run or after it; a compaction where its summary was placed; each image a tool made, after its
+ * step's calls; and, while the run goes on, the response being written. A response pi retried is left out, as the stream's `reset-step` removes it.
  */
 export function assistantMessageOf({
   info,
   entries,
   live,
+  fileUrl,
 }: RunTranscript): ChatMessage {
   const parts: ChatPart[] = [];
   const calls = new Map<string, number>();
@@ -114,6 +123,14 @@ export function assistantMessageOf({
       const at = result && calls.get(result.toolCallId);
       if (result && at !== undefined)
         parts[at] = resultOf(parts[at] as DynamicToolUIPart, result);
+      // The images it made, for the person, after the calls of its step. No filename: the stream's file chunk has
+      // none, and the message streamed and read back is the same; the route names the file when it is downloaded.
+      for (const file of filesOf(entry))
+        parts.push({
+          type: "file",
+          mediaType: file.mediaType,
+          url: fileUrl(file.id),
+        });
     }
   }
   const writing = live?.generation?.message as AssistantMessage | undefined;

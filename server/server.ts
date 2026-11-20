@@ -33,7 +33,9 @@ import {
   RunRefused,
   type Runtime,
   type WhenBusy,
+  filesOf,
 } from "../loop/index.ts";
+import type { StoredFile } from "../files/index.ts";
 
 import { chatRoutes } from "./chat/routes.ts";
 import { mcpRoutes } from "./mcp/routes.ts";
@@ -219,6 +221,15 @@ export type Server = {
     conversation: string,
     options?: { instructions?: string },
   ) => Promise<CompactInfo>;
+  /**
+   * An image a tool of one of the caller's conversations made, by the id its link gives: its bytes, type and name. A
+   * `ServerError` 404 when it is not one of the conversation's.
+   */
+  file: (
+    request: Request,
+    conversation: string,
+    fileId: string,
+  ) => Promise<StoredFile>;
   /**
    * Delete one of the caller's conversations, as LangGraph's thread delete: the run going on is stopped first, then it
    * is read as not found, and a run on its key makes a new one. Its history stays in pi's storage, unread.
@@ -600,6 +611,40 @@ export function createServer({
     return (await runtime.compact(key, options))!;
   }
 
+  async function file(request: Request, key: string, fileId: string) {
+    await readable(request, key);
+    const found = await runtime.file(key, fileId);
+    if (!found)
+      throw new ServerError(
+        404,
+        "file_not_found",
+        `file "${fileId}" is not found in conversation "${key}"`,
+      );
+    return found;
+  }
+
+  /** The images the tools of a conversation made, oldest first: each tool result's links, each fetched. */
+  async function imagesOf(key: string) {
+    const images: StoredFile[] = [];
+    let cursor: Cursor | undefined;
+    do {
+      const page = await runtime.entries(
+        key,
+        { order: "ascending" },
+        100,
+        cursor,
+      );
+      if (!page) return images;
+      for (const entry of page.items)
+        for (const ref of filesOf(entry)) {
+          const found = await runtime.file(key, ref.id);
+          if (found) images.push(found);
+        }
+      cursor = page.next;
+    } while (cursor !== undefined);
+    return images;
+  }
+
   async function remove(request: Request, key: string) {
     await readable(request, key);
     await runtime.delete(key);
@@ -719,6 +764,21 @@ export function createServer({
       202,
     );
   });
+  app.get("/conversations/:conversation/files/:file", async (c) => {
+    const { data, mediaType, name } = await file(
+      c.req.raw,
+      c.req.param("conversation"),
+      c.req.param("file"),
+    );
+    return c.body(data.slice().buffer, 200, {
+      "content-type": mediaType,
+      "content-length": String(data.byteLength),
+      "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(name)}`,
+      // A file never changes under its id, and is the caller's alone.
+      "cache-control": "private, max-age=31536000, immutable",
+      "x-content-type-options": "nosniff",
+    });
+  });
   app.get("/conversations/:conversation/runs", async (c) =>
     c.json(
       pageOut(
@@ -765,6 +825,7 @@ export function createServer({
       // Nobody can answer a question inside an MCP call: its runs are unattended.
       start: (request, agent, run, control) =>
         start(request, agent, run, control, false),
+      images: imagesOf,
       connectUrl: async (caller, connection) =>
         connectUrl?.({ connection, caller }),
       onError,
@@ -859,6 +920,7 @@ export function createServer({
     update,
     note,
     compact,
+    file,
     delete: remove,
     entries,
     runs,

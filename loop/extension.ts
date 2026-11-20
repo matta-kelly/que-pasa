@@ -21,6 +21,7 @@ import {
   type ServiceIdentity,
   type Tool,
 } from "../define/index.ts";
+import type { FileStore } from "../files/index.ts";
 import { jsonSchema, toPiTool } from "./call.ts";
 import type { Resources } from "./resources.ts";
 import type { ToolEvent } from "./trace.ts";
@@ -57,6 +58,7 @@ export function agentExtension(
   event: ToolEvent,
   started: Started,
   compact: Compact,
+  files?: FileStore,
 ): Extension {
   const { output } = agent;
   const given = toolsOf(agent);
@@ -66,7 +68,7 @@ export function agentExtension(
     );
   }
   const tools = given.map((tool) =>
-    toPiTool(tool, agent.middleware ?? [], resources, event),
+    toPiTool(tool, agent.middleware ?? [], resources, event, files),
   );
   if (output) tools.push(submit(output, agent.accept));
   return defineExtension({

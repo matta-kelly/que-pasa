@@ -16,7 +16,9 @@ import {
   defineAgent,
   defineConnection,
   defineTool,
+  withImages,
 } from "../../define/index.ts";
+import { memoryFiles } from "../../files/index.ts";
 import { openRuntime, type Runtime } from "../../loop/index.ts";
 import { scripted } from "../../loop/scripted.fixture.ts";
 import { humanInTheLoop } from "../../middleware/index.ts";
@@ -112,7 +114,8 @@ async function serve(): Promise<Server> {
   runtime = await openRuntime({
     storage: new MemoryStorage(),
     models,
-    agents: [geo, judge, seller, mailer],
+    agents: [geo, judge, seller, mailer, printer],
+    files: memoryFiles(),
     credentialFor: () => undefined,
   });
   return createServer({
@@ -122,11 +125,36 @@ async function serve(): Promise<Server> {
       return id ? { id } : undefined;
     },
     agentsFor: (caller: Caller) =>
-      caller.id === "owner" ? [geo, judge, seller, mailer] : [geo],
+      caller.id === "owner"
+        ? [geo, judge, seller, mailer]
+        : caller.id === "printer"
+          ? [printer]
+          : [geo],
     connectUrl: ({ connection }) => `/connections#${connection.name}`,
     onError: () => {},
   });
 }
+
+/** A tool that renders a barcode: a PNG for the person, a line for the model. */
+const render = defineTool({
+  name: "render",
+  description: "Render a barcode.",
+  schema: z.object({}),
+  run: () =>
+    withImages("Rendered.", [
+      {
+        name: "a.png",
+        mediaType: "image/png",
+        data: new Uint8Array([137, 80, 78, 71]),
+      },
+    ]),
+});
+const printer = defineAgent({
+  name: "printer",
+  model,
+  instructions: "Print.",
+  tools: [render],
+});
 
 /** The two eras of the protocol a client speaks: 2026-07-28, stateless, and a 2025 client's handshake. */
 const eras = [
@@ -198,6 +226,24 @@ describe.each(eras)("an MCP client speaking %s", (_name, era) => {
       await connect(server, { caller: "stranger", era })
     ).listTools();
     expect(theirs.tools.map((tool) => tool.name)).toEqual(["geo"]);
+  });
+
+  it("gives the images the run's tools made as image content, after the answer", async () => {
+    const server = await serve();
+    const client = await connect(server, { era, caller: "printer" });
+    faux.setResponses([calls("render"), says("Printed.")]);
+    const result = await client.callTool({
+      name: "printer",
+      arguments: { input: "Print." },
+    });
+    expect(result.content).toEqual([
+      { type: "text", text: "Printed." },
+      {
+        type: "image",
+        data: Buffer.from([137, 80, 78, 71]).toString("base64"),
+        mimeType: "image/png",
+      },
+    ]);
   });
 
   it("runs the agent once per call, each on a conversation of its own, kept in the caller's history", async () => {

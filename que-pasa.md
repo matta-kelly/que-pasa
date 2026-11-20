@@ -49,6 +49,7 @@ What is written in a workspace's own repo, with que-pasa's `define`: its agents,
 - what an agent is built from
 	- tools (`defineTool`): [[define-tool]]. A function an agent can call, written once, so any agent in the workspace can be given it. It gets what it acts on from its conversation as a resource, a sandbox or a login, and never holds it
 		- ready-made: the file and command tools of [[que-pasa-sandbox]], which act in the sandbox the host gives each conversation
+		- images for the person: a tool gives them beside the model's text, `withImages(content, images)`; the bytes go in the deployment's file store, a bucket, and the conversation keeps their links ([[que-pasa-files]])
 	- memory: files the model always reads, loaded once when a conversation is made and kept in it, picked by `memory({ backend, sources })` in the agent's middleware, after Deep Agents' `MemoryMiddleware`. A file of `memory/` can serve any agent; the role's note links what its agent loads. Read only: the agent does not edit it
 	- skills: packaged know-how for one kind of task, a folder with `SKILL.md` (the Agent Skills format), picked by `skills({ backend, sources })` in the agent's middleware, after Deep Agents' `SkillsMiddleware`. The agent sees each skill's name and description, loaded once when a conversation is made, and reads the rest with `read_file` when a task matches
 	- connections (`defineConnection`): a resource that links to one outside service through a login, which its tools list in `uses` ([[define-tool#Reaching an outside system]])
@@ -88,9 +89,10 @@ How a workspace's agents are reached: a process that runs them.
 ## Seams
 
 What crosses between que-pasa and the outside.
-- a workspace's repo, and a host, import `@mku1tra/que-pasa/define`, `/loop`, `/middleware`, `/sandbox` and `/server`, by its published version on npm. zod is a peer
+- a workspace's repo, and a host, import `@mku1tra/que-pasa/define`, `/loop`, `/middleware`, `/sandbox`, `/files` and `/server`, by its published version on npm. zod is a peer
 - a host gives storage, models, agents and resources, and gets results, usage, and conversations it can read: a caller's list, how one stands, and its entries
 - a server ([[que-pasa-server]]): que-pasa ships the routes, the checks and the run; the deployment answers who is calling, which agents they get and what context a conversation has, from its own control plane, and serves it on its box
+- a file store ([[que-pasa-files]]): que-pasa ships the interface, the key layout and three stores, memory, a folder and S3-compatible; the host picks one and gives its bucket and keys
 - a sandbox ([[que-pasa-sandbox]]): que-pasa ships the backends, the view and the tools; the host gives each conversation its backend, and sets the policy: image, mounts, network, read-only, view
 - spans go out through `@opentelemetry/api` only. The host owns the SDK and where spans go; it records what only it knows on its own span and calls `run()` inside it. Every segment of a run, also after a crash, is in that trace
 - evals (eval2): que-pasa gives them traces and runs; grading is theirs

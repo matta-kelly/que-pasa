@@ -20,7 +20,8 @@ A tool is a name, a description, the input it takes and what it does; it gets wh
 	- name: what the model calls it by, snake_case, at most 64 characters
 	- description: what it does and when to call it; the model reads it to choose
 	- schema: the input the model must give, a zod object
-	- `run(input, runtime)`: what it does
+	- `run(input, runtime)`: what it does. What it gives back is the model's text: a string as it is, any other value as JSON
+		- images for the person: `withImages(content, images)`, after LangChain's `content_and_artifact`. The model reads only `content`; each image, `{ name, mediaType, data }`, a PNG, JPEG, GIF or WebP of at most 10 MB, is kept in the deployment's file store, and the conversation keeps its link ([[que-pasa-files]]). A bad image, or a runtime with no store, fails the call with why
 	- uses: the resources it asks its run for, if any (see [[#Reaching an outside system]])
 	- `replay: "safe"`: a call a crash cut off may run again, as running it again changes nothing more: it only reads, or writes each item by the item's own key, such as an order's number, skipping what is there (see [[#How a run calls it]], [[que-pasa-loop#The idea]])
 - what it gets from a run: `runtime.caller`, who the run acts for, `runtime.context`, the JSON the host gave the run, `runtime.use(resource)`, the run's value of a resource it uses, and `runtime.signal`, aborted when the call is

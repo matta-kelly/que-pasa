@@ -17,6 +17,10 @@
       "types": "./dist/define/index.d.ts",
       "default": "./dist/define/index.js"
     },
+    "./files": {
+      "types": "./dist/files/index.d.ts",
+      "default": "./dist/files/index.js"
+    },
     "./loop": {
       "types": "./dist/loop/index.d.ts",
       "default": "./dist/loop/index.js"
@@ -51,6 +55,7 @@
     "@opentelemetry/api": "1.10.0",
     "@opentelemetry/semantic-conventions": "1.45.0",
     "ai": "7.0.172",
+    "aws4fetch": "1.0.20",
     "hono": "4.13.18",
     "yaml": "2.9.1"
   },

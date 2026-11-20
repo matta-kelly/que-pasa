@@ -47,6 +47,7 @@ import {
   parseModel,
   type ServiceIdentity,
 } from "../define/index.ts";
+import { fileKey, type FileStore, type StoredFile } from "../files/index.ts";
 import { identityOf, until } from "./call.ts";
 import { ConnectionsMissing, RunFailed, RunRefused } from "./errors.ts";
 import {
@@ -246,6 +247,11 @@ export type RuntimeOptions = {
    * default, as the GenAI conventions say: content can hold sensitive data.
    */
   captureContent?: boolean;
+  /**
+   * Where the images the agents' tools make are kept: a bucket, `s3Files(...)`, or `folderFiles(...)`. A conversation
+   * keeps only their links. Needed when a tool gives images; a call that gives some without it fails with why.
+   */
+  files?: FileStore;
 };
 
 /** What a run needs besides the agent and its input. */
@@ -360,6 +366,11 @@ export type Runtime = {
     note: { noteId: string; text: string },
   ): Promise<NoteInfo | undefined>;
   /**
+   * An image a tool of the conversation made, by its id, as its link gives it: its bytes, type and name. Undefined when
+   * no run made the conversation, the id is not one a tool gave, or the runtime has no file store.
+   */
+  file(key: string, fileId: string): Promise<StoredFile | undefined>;
+  /**
    * Compact a conversation now, pi's `compact()`: pi summarizes its older part and keeps its recent part, while the
    * conversation works. On an idle conversation the summary is placed when it is written; while a run goes on, at that
    * run's next step. `instructions` say what the summary keeps. While a compaction goes on, none more is started. Starts
@@ -401,6 +412,9 @@ const context = BACKGROUND_CONTEXT;
 /** What a run gives its conversation: what the conversation's first run makes it with, and every run gives again. */
 type Made = Omit<ConversationState, "runs" | "title" | "createdAt">;
 
+/** A file's id: a UUID, as a call gives it. */
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 /** The most characters a title holds: a cut first input, or a rename. */
 const titleMax = 200;
 
@@ -418,6 +432,7 @@ export async function openRuntime({
   resources: providers = [],
   credentialFor,
   captureContent = false,
+  files,
 }: RuntimeOptions): Promise<Runtime> {
   const resources = createResources(providers, credentialFor);
   resources.check(
@@ -447,6 +462,7 @@ export async function openRuntime({
         tracing.toolEvent,
         started,
         compactById,
+        files,
       ),
     });
   }
@@ -1009,6 +1025,14 @@ export async function openRuntime({
     );
   }
 
+  async function file(key: string, fileId: string) {
+    // An id is a UUID the call gave it, so a key never reaches outside the conversation's folder.
+    if (!files || !uuid.test(fileId)) return undefined;
+    const id = await idOf(key);
+    if (id === undefined) return undefined;
+    return files.get(fileKey(id, fileId));
+  }
+
   async function compact(
     key: string,
     { instructions }: { instructions?: string } = {},
@@ -1397,6 +1421,7 @@ export async function openRuntime({
     runOf,
     update,
     note,
+    file,
     compact,
     delete: remove,
     stop,

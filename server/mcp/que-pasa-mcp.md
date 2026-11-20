@@ -46,7 +46,7 @@ A call is one run, on a conversation of its own, which nobody attends. Its outco
 	- an approval: the run fails `needs_answer` before the gated tool acts, and the call says what it asked, by the question's description. The run reads failed in the history
 - progress: a call that carries a progress token gets `notifications/progress` each second while the run goes on, so a client that times out a quiet call (Claude Code's idle limit is 5 minutes) waits for it
 - its end, the tool's result
-	- done: the agent's text; an agent with an `output` gives it as `structuredContent`, and the same as JSON text
+	- done: the agent's text; an agent with an `output` gives it as `structuredContent`, and the same as JSON text. The images the run's tools made follow, as MCP's image content, base64, in the order they were made ([[que-pasa-files]])
 	- failed: an `isError` result with why, which the model reads and tells the person: a question it stopped on, as above, or `The run failed (<reason>): <message>`
 	- refused by the deployment (`Refused` from `contextFor`): an `isError` result with its message
 - cancelled: the client closes the call, or goes away, as the protocol treats both as a cancel. The run stops, as a person's stop does ([[que-pasa-loop#Conversation and run]]): kept `stopped`, and the tool's `runtime.signal` aborts

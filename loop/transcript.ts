@@ -2,6 +2,7 @@ import type { Context } from "@earendil-works/chord/context";
 import type {
   AssistantMessage,
   Message,
+  ToolResultMessage,
   UserMessage,
 } from "@earendil-works/pi-ai";
 import {
@@ -12,7 +13,9 @@ import {
   type Page,
   type SettledSubmissionRecord,
   SystemEntry,
+  ToolResultEntry,
 } from "@earendil-works/pi-durable";
+import type { FileRef } from "../define/index.ts";
 
 /** A reader of one conversation's raw history: a conversation, or a hook's api. */
 type Entries = {
@@ -202,4 +205,15 @@ export async function outcomeOf(
     }
   }
   return outcome;
+}
+
+/**
+ * The images a tool result's entry links to: its details' `files`, as the call kept them. None for any other entry, or
+ * a result that gave none.
+ */
+export function filesOf(entry: EntryRecord): FileRef[] {
+  if (!ToolResultEntry.is(entry)) return [];
+  const result = entry.model?.[0] as ToolResultMessage | undefined;
+  const details = result?.details as { files?: FileRef[] } | undefined;
+  return Array.isArray(details?.files) ? details.files : [];
 }

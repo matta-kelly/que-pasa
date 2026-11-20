@@ -93,7 +93,21 @@ export function mcpServerOf({
           if (!(error instanceof ServerError)) throw error;
           return failed(await refusalText(error));
         }
-        return resultOf(outcome, agent, request);
+        const result = resultOf(outcome, agent, request);
+        if (outcome.status !== "done") return result;
+        // The images its tools made, for the person, after the answer: MCP's image content.
+        const images = await surface.images(id);
+        return {
+          ...result,
+          content: [
+            ...result.content,
+            ...images.map(({ data, mediaType }) => ({
+              type: "image" as const,
+              data: Buffer.from(data).toString("base64"),
+              mimeType: mediaType,
+            })),
+          ],
+        };
       },
     );
   }

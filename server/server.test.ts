@@ -13,7 +13,9 @@ import {
   defineConnection,
   defineTool,
   type Runtime,
+  withImages,
 } from "../define/index.ts";
+import { memoryFiles } from "../files/index.ts";
 import { openRuntime, type Runtime as Loop } from "../loop/index.ts";
 import { scripted } from "../loop/scripted.fixture.ts";
 import {
@@ -83,6 +85,27 @@ const seller = defineAgent({
   instructions: "Sell.",
   tools: [whoAmI],
 });
+/** A tool that renders a barcode: a PNG for the person, a line for the model. */
+const render = defineTool({
+  name: "render",
+  description: "Render a barcode.",
+  schema: z.object({}),
+  run: () =>
+    withImages("Rendered.", [
+      {
+        name: "bär code.png",
+        mediaType: "image/png",
+        data: new Uint8Array([137, 80, 78, 71]),
+      },
+    ]),
+});
+const printer = defineAgent({
+  name: "printer",
+  model,
+  instructions: "Print.",
+  tools: [render],
+});
+
 /** The CRM logins the deployment holds, by caller. */
 const logins = new Map<string, string>();
 
@@ -121,7 +144,8 @@ async function serve(
   loop = await openRuntime({
     storage: new MemoryStorage(),
     models,
-    agents: [geo, judge, secret, seller],
+    agents: [geo, judge, secret, seller, printer],
+    files: memoryFiles(),
     credentialFor: ({ caller }) => {
       const token = logins.get(caller.id);
       return token ? { token } : undefined;
@@ -754,6 +778,65 @@ describe("the server's history routes", () => {
     await expect(
       server.compact(new Request("http://que/", { headers: as("owner") }), "a"),
     ).resolves.toEqual({ status: "compacting" });
+  });
+
+  it("serve an image a tool of the caller's conversation made, with its type and name; another caller's, or an id it never gave, not found", async () => {
+    const server = await serve({
+      agentsFor: (caller) => (caller.id === "owner" ? [printer] : []),
+    });
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("render", {}, { id: "r" })], {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage([fauxText("Done.")]),
+    ]);
+    await (await wait_(server, "p", asks("1", "Print.", "printer"))).json();
+    const { items } = await (
+      await get(server, "/conversations/p/entries?limit=50")
+    ).json();
+    const [link] = items.flatMap(
+      (entry: { model?: { details?: { files?: { id: string }[] } }[] }) =>
+        entry.model?.[0]?.details?.files ?? [],
+    );
+    expect(link).toEqual({
+      id: expect.any(String),
+      name: "bär code.png",
+      mediaType: "image/png",
+      size: 4,
+    });
+    const served = await get(server, `/conversations/p/files/${link.id}`);
+    expect(served.status).toBe(200);
+    expect(Object.fromEntries(served.headers)).toMatchObject({
+      "content-type": "image/png",
+      "content-length": "4",
+      "content-disposition": "inline; filename*=UTF-8''b%C3%A4r%20code.png",
+      "cache-control": "private, max-age=31536000, immutable",
+      "x-content-type-options": "nosniff",
+    });
+    expect([...new Uint8Array(await served.arrayBuffer())]).toEqual([
+      137, 80, 78, 71,
+    ]);
+    const theirs = await get(
+      server,
+      `/conversations/p/files/${link.id}`,
+      "stranger",
+    );
+    expect([theirs.status, await errorOf(theirs)]).toEqual([
+      404,
+      "conversation_not_found",
+    ]);
+    const none = await get(
+      server,
+      `/conversations/p/files/${crypto.randomUUID()}`,
+    );
+    expect([none.status, await errorOf(none)]).toEqual([404, "file_not_found"]);
+    await expect(
+      server.file(
+        new Request("http://que/", { headers: as("owner") }),
+        "p",
+        link.id,
+      ),
+    ).resolves.toMatchObject({ mediaType: "image/png", name: "bär code.png" });
   });
 
   it("read a conversation that waits on a login: the run to answer on, and its question with the deployment's page", async () => {

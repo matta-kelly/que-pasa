@@ -111,6 +111,7 @@ export function chatRoutes(server: ChatServer): Hono {
         ...(held ? { held } : {}),
         signal: request.signal,
         show: (interrupt) => server.shown(request, key, interrupt),
+        fileUrl: fileUrlOf(request, key),
         onError: server.onError,
       }),
       keepAliveMs,
@@ -124,6 +125,7 @@ export function chatRoutes(server: ChatServer): Hono {
         server.shown(request, key, interrupt),
       ),
       entries: await runEntries(runtime, key)(info),
+      fileUrl: fileUrlOf(request, key),
     };
     return {
       user: userMessageOf(transcript),
@@ -291,4 +293,15 @@ function answersOf(parts: readonly { type: string }[]): Record<string, Json> {
         };
   }
   return answers;
+}
+
+/**
+ * Where a client fetches a conversation's image: the server's file route, from the chat request's own URL, so a server
+ * mounted under a path gives links under it. The chat's routes are `/chat` and `/chat/<id>/<what>`.
+ */
+function fileUrlOf(request: Request, key: string) {
+  const url = new URL(request.url);
+  const base = url.pathname.replace(/\/chat(?:\/[^/]+\/[^/]+)?\/?$/, "");
+  return (fileId: string) =>
+    `${url.origin}${base}/conversations/${encodeURIComponent(key)}/files/${encodeURIComponent(fileId)}`;
 }

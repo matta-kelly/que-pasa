@@ -108,6 +108,11 @@ export class MessageDiff {
       }
       case "dynamic-tool":
         return toolChunks(from as DynamicToolUIPart | undefined, to);
+      case "file":
+        // A file is its own chunk: sent once, when it first appears.
+        return from
+          ? []
+          : [{ type: "file", url: to.url, mediaType: to.mediaType }];
       case "data-steer":
       case "data-note":
       case "data-compaction":
@@ -222,6 +227,8 @@ export type RunStreamOptions = {
   signal?: AbortSignal;
   /** A question as a client gets it, such as a login's with the deployment's page. */
   show: (interrupt: Interrupt) => Promise<Interrupt>;
+  /** Where a client fetches an image a tool made, by its id. */
+  fileUrl: (fileId: string) => string;
   /** How long the stream may be quiet before a keep-alive comment. */
   keepAliveMs?: number;
   onError: (error: unknown) => void;
@@ -239,6 +246,7 @@ export function runStream({
   held,
   signal,
   show,
+  fileUrl,
   onError,
 }: RunStreamOptions) {
   return createUIMessageStream<ChatMessage>({
@@ -265,6 +273,7 @@ export function runStream({
           info,
           entries: await transcript(info),
           ...(going ? { live: view.live } : {}),
+          fileUrl,
         });
         for (const chunk of diff.next(message.parts)) writer.write(chunk);
         const end = endOf(info);

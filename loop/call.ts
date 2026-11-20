@@ -24,7 +24,10 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
   type Connection,
+  type FileRef,
+  imageTypes,
   isConnection,
+  isWithImages,
   type Json,
   LoginRejected,
   type Middleware,
@@ -33,8 +36,10 @@ import {
   type Tool,
   type ToolCallHandler,
   type ToolCallRequest,
+  type ToolImage,
   type ToolMessage,
 } from "../define/index.ts";
+import { fileKey, type FileStore } from "../files/index.ts";
 import { NoLogin, type Resources } from "./resources.ts";
 import {
   type Asked,
@@ -47,6 +52,9 @@ import type { ToolEvent } from "./trace.ts";
 
 /** Any tool, as an agent holds it. */
 type AnyTool = Tool<z.ZodObject, Json | undefined>;
+
+/** The most bytes one image of a tool's result may hold: 10 MB. */
+export const maxImageBytes = 10 * 1024 * 1024;
 
 /** The memo that marks a call's tool as started. */
 const startedMemo = "que-pasa.started";
@@ -78,6 +86,7 @@ export function toPiTool(
   middleware: readonly Middleware[],
   resources: Resources,
   event: ToolEvent,
+  files?: FileStore,
 ) {
   return definePiTool({
     name: tool.name,
@@ -89,6 +98,7 @@ export function toPiTool(
         tool,
         middleware,
         resources,
+        files,
         args as { [key: string]: Json },
         api,
         event,
@@ -97,6 +107,10 @@ export function toPiTool(
       return {
         output: [{ type: "text", text: message.content }],
         ...(message.status === "error" ? { isError: true } : {}),
+        // The images' links, for the UIs: pi's details, never read by the model.
+        ...(message.files?.length
+          ? { details: { files: message.files.map((file) => ({ ...file })) } }
+          : {}),
       };
     },
   });
@@ -117,6 +131,7 @@ async function call(
   tool: AnyTool,
   middleware: readonly Middleware[],
   resources: Resources,
+  files: FileStore | undefined,
   args: { [key: string]: Json },
   api: ToolExecutionApi,
   event: ToolEvent,
@@ -234,6 +249,12 @@ async function call(
         Promise.resolve().then(() => tool.run(input, runtime)),
         context,
       );
+      if (isWithImages(result))
+        return {
+          status: "success",
+          content: result.content,
+          files: await store(tool.name, result.images, files, conversationId),
+        };
       return {
         status: "success",
         content: typeof result === "string" ? result : JSON.stringify(result),
@@ -271,6 +292,44 @@ async function call(
   }
 
   return wrapped();
+}
+
+/**
+ * A tool's images, each checked and put in the deployment's store under a new id, in the conversation's folder: what
+ * the conversation keeps of them, their links. A bad image, or a runtime with no store, fails the call with why.
+ */
+async function store(
+  tool: string,
+  images: readonly ToolImage[],
+  files: FileStore | undefined,
+  conversationId: ConversationId,
+): Promise<FileRef[]> {
+  if (images.length === 0) return [];
+  if (!files)
+    throw new Error(
+      `tool "${tool}": it gave images, and the deployment gave no file store (openRuntime's files)`,
+    );
+  for (const { name, mediaType, data } of images) {
+    if (name.trim() === "")
+      throw new Error(`tool "${tool}": an image has no name`);
+    if (!(imageTypes as readonly string[]).includes(mediaType))
+      throw new Error(
+        `tool "${tool}": image "${name}" is ${mediaType}, not one of ${imageTypes.join(", ")}`,
+      );
+    if (!(data instanceof Uint8Array))
+      throw new Error(`tool "${tool}": image "${name}" is not bytes`);
+    if (data.byteLength > maxImageBytes)
+      throw new Error(
+        `tool "${tool}": image "${name}" is ${data.byteLength} bytes, over ${maxImageBytes}`,
+      );
+  }
+  const refs: FileRef[] = [];
+  for (const { name, mediaType, data } of images) {
+    const id = randomUUID();
+    await files.put(fileKey(conversationId, id), { data, mediaType, name });
+    refs.push({ id, name, mediaType, size: data.byteLength });
+  }
+  return refs;
 }
 
 /**

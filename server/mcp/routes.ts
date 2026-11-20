@@ -12,6 +12,7 @@ import { Hono } from "hono";
 import type { Caller, Connection } from "../../define/index.ts";
 import type { AnyAgent, RunControl, RunOutcome } from "../server.ts";
 import { mcpServerOf } from "./tools.ts";
+import type { StoredFile } from "../../files/index.ts";
 
 /** What the MCP surface needs of the server: its checks, and its runs, so every surface refuses and runs alike. */
 export type McpSurface = {
@@ -29,6 +30,8 @@ export type McpSurface = {
     run: { conversation: string; runId: string; input: string },
     control: RunControl,
   ) => Promise<{ outcome: Promise<RunOutcome> }>;
+  /** The images the tools of a conversation made, in the order they were made. */
+  images: (conversation: string) => Promise<StoredFile[]>;
   /** Where the caller connects a connection: the deployment's page, as it gives it. */
   connectUrl: (
     caller: Caller,

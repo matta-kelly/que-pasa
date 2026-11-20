@@ -104,8 +104,9 @@ const chat = useChat<ChatMessage>({
 |---|---|
 | `@mku1tra/que-pasa/define` | `defineAgent`, `defineTool`, `defineConnection`, `defineResource` |
 | `@mku1tra/que-pasa/loop` | `openRuntime`: runs, conversations, stops, reads |
-| `@mku1tra/que-pasa/middleware` | `memory`, `skills`, `humanInTheLoop` |
+| `@mku1tra/que-pasa/middleware` | `memory`, `skills`, `humanInTheLoop`, `compaction` |
 | `@mku1tra/que-pasa/sandbox` | file and shell tools, local and Podman backends, views |
+| `@mku1tra/que-pasa/files` | the file store for the images tools make: memory, folder and S3-compatible |
 | `@mku1tra/que-pasa/server` | `createServer`: the HTTP API, chat and MCP |
 
 ## Documentation
@@ -115,8 +116,9 @@ The design notes live beside the code:
 - [Overview](que-pasa.md): what que-pasa is, and how its parts fit
 - [The loop](loop/que-pasa-loop.md): conversations, runs, interrupts, crash recovery, and the invariants each test holds
 - [Tools](define/define-tool.md): resources, connections and logins, approvals
-- [Middleware](middleware/que-pasa-middleware.md): memory, skills, approvals
+- [Middleware](middleware/que-pasa-middleware.md): memory, skills, approvals, compaction
 - [Sandbox](sandbox/que-pasa-sandbox.md): backends, and what each one's wall stops
+- [Files](files/que-pasa-files.md): where the images tools make are kept, and how they are served
 - [Server](server/que-pasa-server.md): the HTTP API, refusals, long runs
 - [Chat](server/chat/que-pasa-chat.md) and [MCP](server/mcp/que-pasa-mcp.md): the two surfaces
 

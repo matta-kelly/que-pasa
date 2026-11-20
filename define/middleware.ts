@@ -1,6 +1,6 @@
 import type { z } from "zod";
 import type { Caller, ConversationOf, Json } from "./runtime.ts";
-import type { Tool } from "./tool.ts";
+import type { FileRef, Tool } from "./tool.ts";
 
 /**
  * An optional behaviour on an agent's loop, after LangChain's middleware: a name and hooks, each optional. S is the state
@@ -91,8 +91,16 @@ export type ToolCallHandler = (args?: {
   [key: string]: Json;
 }) => Promise<ToolMessage>;
 
-/** A call's result, as LangChain's `ToolMessage`: the text the model reads, and whether the call failed. */
-export type ToolMessage = { content: string; status: "success" | "error" };
+/**
+ * A call's result, as LangChain's `ToolMessage`: the text the model reads, whether the call failed, and the images the
+ * tool made for the person, stored already (LangChain's `artifact`). A middleware that gives a result of its own gives
+ * none.
+ */
+export type ToolMessage = {
+  content: string;
+  status: "success" | "error";
+  files?: readonly FileRef[];
+};
 
 const middlewareName = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 

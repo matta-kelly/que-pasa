@@ -7,9 +7,11 @@ import {
   type Message,
 } from "@earendil-works/pi-ai";
 import {
+  AssistantEntry,
   CompactionEntry,
   type EntryRecord,
   MemoryStorage,
+  ToolResultEntry,
   UserEntry,
 } from "@earendil-works/pi-durable";
 import {
@@ -19,7 +21,8 @@ import {
 } from "ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { defineAgent, defineTool } from "../../define/index.ts";
+import { defineAgent, defineTool, withImages } from "../../define/index.ts";
+import { memoryFiles } from "../../files/index.ts";
 import { openRuntime, type Runtime } from "../../loop/index.ts";
 import { humanInTheLoop } from "../../middleware/index.ts";
 import { createServer, type Server } from "../index.ts";
@@ -60,6 +63,20 @@ const look = defineTool({
   replay: "safe",
   run: ({ name }) => `${name} is a customer`,
 });
+/** A tool that renders a barcode: a PNG for the person, a line for the model. */
+const render = defineTool({
+  name: "render",
+  description: "Render a barcode.",
+  schema: z.object({}),
+  run: () =>
+    withImages("Rendered.", [
+      {
+        name: "a.png",
+        mediaType: "image/png",
+        data: new Uint8Array([137, 80, 78, 71]),
+      },
+    ]),
+});
 let sent: string[] = [];
 const send = defineTool({
   name: "send",
@@ -74,7 +91,7 @@ const agent = defineAgent({
   name: "chat",
   model,
   instructions: "Chat.",
-  tools: [hold, look, send],
+  tools: [hold, look, send, render],
   middleware: [humanInTheLoop({ interruptOn: { send: true } })],
 });
 
@@ -91,6 +108,7 @@ async function serve(): Promise<Server> {
     storage: new MemoryStorage(),
     models,
     agents: [agent],
+    files: memoryFiles(),
   });
   return createServer({
     runtime,
@@ -510,6 +528,7 @@ describe("the chat surface, with the AI SDK's own client", () => {
       ({ id, conversationId: 1, kind, model }) as unknown as EntryRecord;
     const message = assistantMessageOf({
       info: { runId: "m1", status: "done", steers: [], questions: [] },
+      fileUrl: (id) => `/files/${id}`,
       entries: [
         entry(1, UserEntry.kind, [
           { role: "user", content: "Write.", timestamp: 0 },
@@ -535,6 +554,85 @@ describe("the chat surface, with the AI SDK's own client", () => {
       type: "data-compaction",
       id: "2",
       data: { summary: "<summary>\nSummary.\n</summary>" },
+    });
+  });
+
+  it("streams an image a tool made as a file part, at the server's file route, which serves it", async () => {
+    const server = await serve();
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("render", {}, { id: "r" })], {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage([fauxText("Done.")]),
+    ]);
+    const streamed = (await send_(server, [said("m1", "Print.")])).at(-1)!;
+    const file = streamed.parts.find((part) => part.type === "file");
+    expect(file).toEqual({
+      type: "file",
+      mediaType: "image/png",
+      url: expect.stringMatching(
+        /^http:\/\/que\/conversations\/c\/files\/[0-9a-f-]{36}$/,
+      ),
+    });
+    const [, answered] = (await history(server)).messages;
+    expect(answered!.parts).toContainEqual(file);
+    const served = await server.fetch(
+      new Request((file as { url: string }).url, {
+        headers: { "x-caller": "owner" },
+      }),
+    );
+    expect(served.status).toBe(200);
+    expect(served.headers.get("content-type")).toBe("image/png");
+  });
+
+  it("shows each image a tool made as a file part after its step's calls, the same streamed and read back", () => {
+    const record = (id: number, kind: string, model: unknown[]) =>
+      ({ id, conversationId: 1, kind, model }) as unknown as EntryRecord;
+    const message = assistantMessageOf({
+      info: { runId: "m1", status: "done", steers: [], questions: [] },
+      fileUrl: (id) => `http://que/conversations/c/files/${id}`,
+      entries: [
+        record(1, UserEntry.kind, [
+          { role: "user", content: "Print.", timestamp: 0 },
+        ]),
+        record(2, AssistantEntry.kind, [
+          fauxAssistantMessage([fauxToolCall("render", {}, { id: "r" })], {
+            stopReason: "toolUse",
+          }),
+        ]),
+        record(3, ToolResultEntry.kind, [
+          {
+            role: "toolResult",
+            toolCallId: "r",
+            toolName: "render",
+            content: [{ type: "text", text: "Rendered." }],
+            details: {
+              files: [
+                { id: "f1", name: "a.png", mediaType: "image/png", size: 4 },
+              ],
+            },
+            isError: false,
+            timestamp: 0,
+          },
+        ]),
+      ],
+    });
+    expect(message.parts.slice(1)).toEqual([
+      expect.objectContaining({
+        type: "dynamic-tool",
+        state: "output-available",
+        output: "Rendered.",
+      }),
+      {
+        type: "file",
+        mediaType: "image/png",
+        url: "http://que/conversations/c/files/f1",
+      },
+    ]);
+    expect(new MessageDiff("m1:answer").next(message.parts)).toContainEqual({
+      type: "file",
+      mediaType: "image/png",
+      url: "http://que/conversations/c/files/f1",
     });
   });
 });
