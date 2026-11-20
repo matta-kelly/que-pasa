@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canExecute,
   type FileBackend,
@@ -21,6 +21,10 @@ import {
   view,
 } from "./index.ts";
 import { hasPodman, image } from "./podman.fixture.ts";
+
+// A podman case starts its own container on its first call, beside the other containers a run starts (Garage, for
+// the files): 5 seconds, vitest's default, is too short for that on a busy runner.
+vi.setConfig({ testTimeout: 30_000 });
 
 /** The files every case starts with, from the root. */
 const seed: Record<string, string> = {
