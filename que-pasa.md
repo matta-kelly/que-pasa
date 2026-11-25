@@ -26,9 +26,10 @@ What is written in a workspace's own repo, with que-pasa's `define`: its agents,
 ```
 <repo>/
 └── workspace/
-    ├── connections.ts          each connection, and who owns its login
+    ├── connections/
+    │   └── <service>/          one outside service: its client, and its connection, with who owns its login
     ├── tools/
-    │   └── <service>/          the tools that read one connection
+    │   └── <service>/          the tools that use one connection
     │       └── <tool>.ts
     ├── memory/
     │   └── <file>.md           context the model always reads
