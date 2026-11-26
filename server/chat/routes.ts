@@ -11,7 +11,7 @@ import {
 } from "ai";
 import { Hono } from "hono";
 import { z } from "zod";
-import type { Caller, Interrupt, Json } from "../../define/index.ts";
+import type { Caller, FileRef, Interrupt, Json } from "../../define/index.ts";
 import type { RunInfo, Runtime } from "../../loop/index.ts";
 import { ServerError } from "../errors.ts";
 import {
@@ -297,11 +297,11 @@ function answersOf(parts: readonly { type: string }[]): Record<string, Json> {
 
 /**
  * Where a client fetches a conversation's image: the server's file route, from the chat request's own URL, so a server
- * mounted under a path gives links under it. The chat's routes are `/chat` and `/chat/<id>/<what>`.
+ * mounted under a path gives links under it. The link ends in the file's name, so a client can show it. The chat's routes are `/chat` and `/chat/<id>/<what>`.
  */
 function fileUrlOf(request: Request, key: string) {
   const url = new URL(request.url);
   const base = url.pathname.replace(/\/chat(?:\/[^/]+\/[^/]+)?\/?$/, "");
-  return (fileId: string) =>
-    `${url.origin}${base}/conversations/${encodeURIComponent(key)}/files/${encodeURIComponent(fileId)}`;
+  return (file: FileRef) =>
+    `${url.origin}${base}/conversations/${encodeURIComponent(key)}/files/${encodeURIComponent(file.id)}/${encodeURIComponent(file.name)}`;
 }

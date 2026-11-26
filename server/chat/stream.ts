@@ -10,7 +10,7 @@ import {
   type DynamicToolUIPart,
   type UIMessageChunk,
 } from "ai";
-import type { Interrupt } from "../../define/index.ts";
+import type { FileRef, Interrupt } from "../../define/index.ts";
 import { shownInfo } from "../questions.ts";
 import type { RunInfo, Runtime } from "../../loop/index.ts";
 import {
@@ -227,8 +227,8 @@ export type RunStreamOptions = {
   signal?: AbortSignal;
   /** A question as a client gets it, such as a login's with the deployment's page. */
   show: (interrupt: Interrupt) => Promise<Interrupt>;
-  /** Where a client fetches an image a tool made, by its id. */
-  fileUrl: (fileId: string) => string;
+  /** Where a client fetches an image a tool made: by its id, then its name. */
+  fileUrl: (file: FileRef) => string;
   /** How long the stream may be quiet before a keep-alive comment. */
   keepAliveMs?: number;
   onError: (error: unknown) => void;

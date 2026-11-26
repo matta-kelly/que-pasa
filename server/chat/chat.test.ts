@@ -528,7 +528,7 @@ describe("the chat surface, with the AI SDK's own client", () => {
       ({ id, conversationId: 1, kind, model }) as unknown as EntryRecord;
     const message = assistantMessageOf({
       info: { runId: "m1", status: "done", steers: [], questions: [] },
-      fileUrl: (id) => `/files/${id}`,
+      fileUrl: (file) => `/files/${file.id}/${file.name}`,
       entries: [
         entry(1, UserEntry.kind, [
           { role: "user", content: "Write.", timestamp: 0 },
@@ -571,7 +571,7 @@ describe("the chat surface, with the AI SDK's own client", () => {
       type: "file",
       mediaType: "image/png",
       url: expect.stringMatching(
-        /^http:\/\/que\/conversations\/c\/files\/[0-9a-f-]{36}$/,
+        /^http:\/\/que\/conversations\/c\/files\/[0-9a-f-]{36}\/a\.png$/,
       ),
     });
     const [, answered] = (await history(server)).messages;
@@ -590,7 +590,8 @@ describe("the chat surface, with the AI SDK's own client", () => {
       ({ id, conversationId: 1, kind, model }) as unknown as EntryRecord;
     const message = assistantMessageOf({
       info: { runId: "m1", status: "done", steers: [], questions: [] },
-      fileUrl: (id) => `http://que/conversations/c/files/${id}`,
+      fileUrl: (file) =>
+        `http://que/conversations/c/files/${file.id}/${file.name}`,
       entries: [
         record(1, UserEntry.kind, [
           { role: "user", content: "Print.", timestamp: 0 },
@@ -626,13 +627,13 @@ describe("the chat surface, with the AI SDK's own client", () => {
       {
         type: "file",
         mediaType: "image/png",
-        url: "http://que/conversations/c/files/f1",
+        url: "http://que/conversations/c/files/f1/a.png",
       },
     ]);
     expect(new MessageDiff("m1:answer").next(message.parts)).toContainEqual({
       type: "file",
       mediaType: "image/png",
-      url: "http://que/conversations/c/files/f1",
+      url: "http://que/conversations/c/files/f1/a.png",
     });
   });
 });

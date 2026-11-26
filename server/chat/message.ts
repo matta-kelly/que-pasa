@@ -16,7 +16,7 @@ import {
   UserEntry,
 } from "@earendil-works/pi-durable";
 import type { DynamicToolUIPart, UIMessage } from "ai";
-import type { Json } from "../../define/index.ts";
+import type { FileRef, Json } from "../../define/index.ts";
 import {
   filesOf,
   NoteEntry,
@@ -48,8 +48,8 @@ export type RunTranscript = {
   entries: readonly EntryRecord[];
   /** pi's live state, when it is the run going on: the answer being written. */
   live?: LiveState;
-  /** Where a client fetches an image a tool made, by its id: the server's file route. */
-  fileUrl: (fileId: string) => string;
+  /** Where a client fetches an image a tool made: the server's file route, by its id, then its name. */
+  fileUrl: (file: FileRef) => string;
 };
 
 /** The id of a run's assistant message: stable, so a replay replaces the message it continues. */
@@ -124,12 +124,12 @@ export function assistantMessageOf({
       if (result && at !== undefined)
         parts[at] = resultOf(parts[at] as DynamicToolUIPart, result);
       // The images it made, for the person, after the calls of its step. No filename: the stream's file chunk has
-      // none, and the message streamed and read back is the same; the route names the file when it is downloaded.
+      // none, and the message streamed and read back is the same. The link ends in the name instead.
       for (const file of filesOf(entry))
         parts.push({
           type: "file",
           mediaType: file.mediaType,
-          url: fileUrl(file.id),
+          url: fileUrl(file),
         });
     }
   }

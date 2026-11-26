@@ -795,8 +795,9 @@ describe("the server's history routes", () => {
       await get(server, "/conversations/p/entries?limit=50")
     ).json();
     const [link] = items.flatMap(
-      (entry: { model?: { details?: { files?: { id: string }[] } }[] }) =>
-        entry.model?.[0]?.details?.files ?? [],
+      (entry: {
+        model?: { details?: { files?: { id: string; name: string }[] } }[];
+      }) => entry.model?.[0]?.details?.files ?? [],
     );
     expect(link).toEqual({
       id: expect.any(String),
@@ -815,6 +816,14 @@ describe("the server's history routes", () => {
     });
     expect([...new Uint8Array(await served.arrayBuffer())]).toEqual([
       137, 80, 78, 71,
+    ]);
+    const named = await get(
+      server,
+      `/conversations/p/files/${link.id}/${encodeURIComponent(link.name)}`,
+    );
+    expect([named.status, named.headers.get("content-type")]).toEqual([
+      200,
+      "image/png",
     ]);
     const theirs = await get(
       server,

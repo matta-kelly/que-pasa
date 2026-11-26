@@ -764,7 +764,8 @@ export function createServer({
       202,
     );
   });
-  app.get("/conversations/:conversation/files/:file", async (c) => {
+  // The name after the id is for the client to show: the file is found by its id alone.
+  app.get("/conversations/:conversation/files/:file/:name?", async (c) => {
     const { data, mediaType, name } = await file(
       c.req.raw,
       c.req.param("conversation"),
